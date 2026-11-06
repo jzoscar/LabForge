@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}LabForge{% endblock %} · LabForge</title>
   <link rel="stylesheet" href="/static/style.css">
+  {% block head %}{% endblock %}
   <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
 </head>
 <body>
@@ -13,7 +14,7 @@
   <nav>
     <a href="/" class="{{ 'on' if nav == 'dash' }}">Overview</a>
     <a href="/resources" class="{{ 'on' if nav == 'res' }}">Resources</a>
-    <a href="/iac" class="{{ 'on' if nav == 'iac' }}">IaC plan</a>
+    <a href="/iac" class="{{ 'on' if nav == 'iac' }}">IaC</a>
     <a href="/runs" class="{{ 'on' if nav == 'runs' }}">Runs</a>
     <a href="/docs">API</a>
   </nav>

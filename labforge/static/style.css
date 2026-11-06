@@ -93,6 +93,61 @@ button { background: var(--accent); color: #fff; border-color: var(--accent); cu
 button:disabled { opacity: .5; cursor: not-allowed; }
 .spark { color: var(--accent); vertical-align: middle; }
 
+/* --- IaC workspace & editor --- */
+.page-head .actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.btn { display: inline-block; padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); }
+.btn:hover { text-decoration: none; border-color: var(--accent); }
+button.secondary { background: var(--panel); color: var(--accent); }
+button.ghost { background: transparent; color: var(--err); border-color: var(--line); }
+button.danger { background: var(--err); border-color: var(--err); }
+.inline-form { display: inline; margin: 0; }
+.stack { display: flex; flex-direction: column; gap: 8px; }
+.stack label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+label.inline { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; color: var(--fg); font-size: 14px; }
+h2.gap { margin-top: 18px; }
+.nowrap { white-space: nowrap; }
+.card-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; justify-content: space-between; }
+.grid2.tight { gap: 12px; margin-bottom: 0; align-items: start; }
+.graph { overflow-x: auto; text-align: center; }
+.graph svg { max-width: 100%; height: auto; }
+.kind { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
+.kind.k-network { color: var(--accent); border-color: var(--accent); }
+.kind.k-host { color: var(--ok); border-color: var(--ok); }
+.kind.k-loadbalancer { color: var(--warn); border-color: var(--warn); }
+.kind.k-container { color: #7a4fd0; border-color: #7a4fd0; }
+.notice { padding: 8px 12px; border-radius: 6px; margin: 0 0 12px; background: var(--unk-bg); }
+.notice.ok { background: var(--ok-bg); color: var(--ok); }
+.notice.warn { background: var(--warn-bg); color: var(--warn); }
+.notice.error { background: var(--err-bg); color: var(--err); }
+
+.editor-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr) 380px; gap: 12px; align-items: start; }
+.editor-layout > .card { margin-bottom: 0; }
+.filelist ul { list-style: none; margin: 0 0 12px; padding: 0; }
+.filelist li { padding: 4px 6px; border-radius: 6px; display: flex; justify-content: space-between; gap: 6px; }
+.filelist li.on { background: var(--bg); }
+.filelist .dot { font-size: 10px; }
+.editor-main { padding: 0; overflow: hidden; }
+.editor-main .CodeMirror { height: calc(100vh - 190px); min-height: 420px; font-family: var(--mono); font-size: 13px; }
+.CodeMirror .line-error { background: var(--err-bg); }
+.gutter-error { color: var(--err); font-size: 10px; padding-left: 4px; cursor: default; }
+.CodeMirror-gutter.problems { width: 14px; }
+.panel { max-height: calc(100vh - 190px); overflow-y: auto; }
+.tabs { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
+.tabs button { background: transparent; color: var(--muted); border-color: transparent; padding: 4px 10px; }
+.tabs button.on { background: var(--bg); color: var(--fg); border-color: var(--line); }
+.problems, .outline { list-style: none; margin: 0; padding: 0; }
+.problems li, .outline li { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.problems li { color: var(--err); }
+.problems a { font-family: var(--mono); font-size: 12px; margin-right: 6px; }
+.panel h3 { font-size: 14px; margin: 12px 0 6px; }
+.toc { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+
+@media (max-width: 1100px) {
+  .editor-layout { grid-template-columns: 1fr; }
+  .editor-main .CodeMirror { height: 60vh; }
+  .panel { max-height: none; }
+}
+
 @media (max-width: 640px) {
   .top { padding: 0 16px; gap: 12px; }
   main { padding: 16px; }

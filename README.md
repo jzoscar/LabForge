@@ -6,7 +6,7 @@ An infrastructure-as-code platform for orchestrating and monitoring the hardware
 - **IaC engine**: declare environments in YAML → `plan` computes the diff → `apply` converges the real
   infrastructure (a Terraform-style state + plan model)
 - **Backend**: FastAPI REST API (`/api/v1`, OpenAPI docs at `/docs`) with a background monitoring scheduler
-- **Frontend**: a server-rendered web console (overview, resources, IaC plan, run history); no Node build
+- **Frontend**: a server-rendered web console (overview, resources, IaC workspace with an online editor, run history); no Node build
 - **Agent**: a single-file collector that only needs `psutil`, so it can be copied straight onto
   **ARM Linux boards** and **Windows** test machines
 
@@ -94,6 +94,28 @@ labforge apply infra              # apply for real (asks for confirmation)
 labforge state                    # list every resource and its health
 labforge destroy --env rnd        # tear down one environment (physical machines are deregistered, never wiped)
 ```
+
+### IaC workspace in the browser
+
+The **IaC** page manages the folder at `LABFORGE_IAC_PATH` as a workspace:
+
+- **Browse and inspect**: every file with its environments, resource count and validation status; each
+  environment parsed into a resource table (what is declared, what it depends on) and a dependency graph
+- **Edit online**: a YAML editor that validates as you type. Problems are marked on the exact line
+  (schema errors, unknown fields, broken cross-references, duplicate environments across files), next to
+  a live outline of the parsed structure and a **plan preview computed from the unsaved text**
+- **Save safely**: saving is refused if someone else changed the file since you opened it; every save and
+  delete keeps the previous version, which can be loaded back from the History tab
+- **Create, import, export**: new files from starters (blank, device rig pool, build farm); import
+  `.yaml` / `.yml` files or a `.zip` of a folder (each file is validated on import); export the
+  workspace as a `.zip` or download a single file
+- **Run**: dry-run apply a single file or the whole workspace and follow the run log; real applies from
+  the browser need `LABFORGE_UI_APPLY=1`
+- **Field reference** at `/iac/schema`, generated from the same schema used for validation, plus
+  `/iac/schema.json` for completion in VS Code or any editor using yaml-language-server
+
+Scripts and CI can do the same through the API: `GET/PUT/DELETE /api/v1/iac/files/{path}` (send the
+digest you started from as `If-Match`), `POST /api/v1/iac/validate`, `GET /api/v1/iac/export`.
 
 ### Secrets
 
@@ -206,8 +228,9 @@ boards; on Windows, rely on the BMC (Redfish) for temperatures.
 | `labforge/iac/spec.py` | IaC schema and validation |
 | `labforge/iac/planner.py` | Desired vs. recorded state → ordered plan (topological order, deletes reversed) |
 | `labforge/iac/applier.py` · `providers/` | Plan execution; one driver per resource type |
+| `labforge/iac/workspace.py` · `inspect.py` | IaC files (safe paths, conflicts, history, import/export); parsed views and field reference |
 | `labforge/monitor/` | Async probes, health sweeps, status aggregation |
-| `labforge/api.py` · `web.py` · `templates/` | Backend API and web pages |
+| `labforge/api.py` · `web.py` · `web_iac.py` · `templates/` | Backend API and web pages |
 | `labforge/agent.py` | Host agent |
 
 ## Configuration
@@ -222,6 +245,7 @@ boards; on Windows, rely on the BMC (Redfish) for temperatures.
 | `LABFORGE_AGENT_STALE_AFTER` | `120` | Seconds without a report before an agent counts as lost |
 | `LABFORGE_RETENTION_HOURS` | `24` | Agent metric retention (events are kept 7× longer) |
 | `LABFORGE_UI_APPLY` | `false` | Allow real applies from the web UI |
+| `LABFORGE_UI_EDIT` | `true` | Allow editing, importing and deleting IaC files from the web UI |
 | `LABFORGE_DATA_DIR` | `.labforge` | Generated files such as Terraform variable files |
 
 ## Development
@@ -234,7 +258,7 @@ pytest
 
 | Milestone | Status | Goal |
 |---|---|---|
-| **M0 Platform foundation** | ✅ Done (v0.1.0) | IaC, plan/apply, drivers, monitoring, agent, web console |
+| **M0 Platform foundation** | ✅ Done (v0.1.0) | IaC, plan/apply, drivers, monitoring, agent, web console, IaC workspace |
 | **M1 Build & test lab onboarding** | 🚧 Next | Device pools, build machines, runners and cache services all managed as code |
 | **M2 Device test rigs (on-device CI)** | ⏳ Planned | CI checks out a device, flashes it, runs on-device tests, then returns and restores it |
 | **M3 Alerting & on-call** | ⏳ Planned | Push problems to the right person via Slack / Teams / WhatsApp / SMS |
@@ -250,6 +274,7 @@ pytest
 - [x] Monitoring: ping / TCP / HTTP / BMC / containers / LB backends / gateways, status-change events
 - [x] Agent (ARM Linux / Windows), threshold alerts, architecture and OS drift detection
 - [x] Web console + REST API, automated tests
+- [x] IaC workspace: online editor with line-level validation, structure and plan preview, revision history, import / export, schema-generated field reference
 
 ### M1 Build & test lab onboarding 🚧
 

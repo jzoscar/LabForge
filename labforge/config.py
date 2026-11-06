@@ -3,6 +3,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from labforge.iac.workspace import Workspace
 
 
 def _bool(name: str, default: bool) -> bool:
@@ -26,6 +30,15 @@ class Settings:
     retention_hours: int = 24
     # Real (non dry-run) applies from the web UI are off unless explicitly enabled.
     ui_apply: bool = False
+    # Editing, importing and deleting IaC files from the web UI.
+    ui_edit: bool = True
+
+    def workspace(self) -> Workspace:
+        from labforge.iac.workspace import Workspace
+
+        root = self.iac_path if self.iac_path.is_dir() or self.iac_path.suffix not in {".yaml", ".yml"} \
+            else self.iac_path.parent
+        return Workspace(root, self.data_dir / "history")
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -39,4 +52,5 @@ class Settings:
             agent_stale_after=int(os.getenv("LABFORGE_AGENT_STALE_AFTER", cls.agent_stale_after)),
             retention_hours=int(os.getenv("LABFORGE_RETENTION_HOURS", cls.retention_hours)),
             ui_apply=_bool("LABFORGE_UI_APPLY", cls.ui_apply),
+            ui_edit=_bool("LABFORGE_UI_EDIT", cls.ui_edit),
         )

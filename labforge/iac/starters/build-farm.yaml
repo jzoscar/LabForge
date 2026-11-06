@@ -1,0 +1,48 @@
+# Build farm: a Linux Docker build host with shared caches, and a Windows MSVC build machine.
+# Field reference: /iac/schema
+apiVersion: labforge/v1
+kind: Environment
+metadata:
+  name: __ENV__
+  tier: dev
+  description: CI build machines and shared build caches
+spec:
+  networks:
+    - name: build-net
+      type: physical
+      cidr: 10.50.0.0/24
+      subnets:
+        - { name: build, cidr: 10.50.0.0/24, gateway: 10.50.0.1 }
+
+  hosts:
+    - name: linux-build-01
+      kind: vm
+      platform: { os: linux, arch: amd64 }
+      address: 10.50.0.10
+      subnet: build-net/build
+      connection: { type: ssh, user: ci }
+      monitor:
+        agent: true
+        probes: [ { type: ping }, { type: tcp, port: 22 } ]
+      labels: { runner: linux-docker }
+
+    - name: win-build-01
+      kind: vm
+      platform: { os: windows, arch: amd64 }
+      address: 10.50.0.20
+      subnet: build-net/build
+      connection: { type: winrm, user: ci, passwordRef: win-ci }
+      monitor:
+        agent: true
+        probes: [ { type: ping }, { type: tcp, port: 5985 } ]
+      labels: { runner: windows-msvc }
+
+  containers:
+    - name: sccache
+      host: linux-build-01
+      image: redis:7
+      ports: ["6379:6379"]
+    - name: conan-remote
+      host: linux-build-01
+      image: conanio/conan_server:latest
+      ports: ["9300:9300"]

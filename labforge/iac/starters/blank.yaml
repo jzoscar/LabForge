@@ -1,0 +1,12 @@
+# A new LabForge environment. Field reference: /iac/schema
+apiVersion: labforge/v1
+kind: Environment
+metadata:
+  name: __ENV__
+  tier: dev            # dev | test | rnd | staging | prod
+  description: ""
+spec:
+  networks: []
+  hosts: []
+  loadBalancers: []
+  containers: []

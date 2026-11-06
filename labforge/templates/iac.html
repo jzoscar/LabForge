@@ -1,37 +1,139 @@
 {% extends "base.html" %}
-{% block title %}IaC plan{% endblock %}
+{% block title %}IaC workspace{% endblock %}
 {% block content %}
-<div class="page-head"><h1>IaC plan</h1><span class="mono muted">{{ path }}</span></div>
+<div class="page-head">
+  <h1>IaC workspace</h1>
+  <span class="mono muted">{{ root }}</span>
+  <div class="actions">
+    <a class="btn" href="/iac/schema">Field reference</a>
+    <a class="btn" href="/iac/export">Export .zip</a>
+  </div>
+</div>
+
+<section class="stats">
+  <div class="stat"><div class="n">{{ files|length }}</div><div class="l">Files</div></div>
+  <div class="stat"><div class="n">{{ envs|length }}</div><div class="l">Environments</div></div>
+  <div class="stat"><div class="n">{{ resource_total }}</div><div class="l">Declared resources</div></div>
+  <div class="stat {{ 's-down' if problem_total or errors else 's-up' }}"><div class="n">{{ problem_total if problem_total else errors|length }}</div><div class="l">Problems</div></div>
+</section>
+
+{% if import_results %}
+<section class="card">
+  <h2>Import results</h2>
+  <table>
+    <thead><tr><th>File</th><th>Result</th><th>Details</th></tr></thead>
+    <tbody>
+    {% for r in import_results %}
+    <tr>
+      <td class="mono">{% if r.status in ('created', 'updated') %}<a href="/iac/edit?path={{ r.path }}">{{ r.path }}</a>{% else %}{{ r.path }}{% endif %}</td>
+      <td><span class="badge {{ 's-up' if r.status in ('created', 'updated') else ('s-degraded' if r.status == 'skipped' else 's-down') }}">{{ r.status }}</span></td>
+      <td class="sub">{{ r.detail }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<div class="grid2">
+  <section class="card">
+    <h2>Files</h2>
+    {% if files %}
+    <table>
+      <thead><tr><th>File</th><th>Environments</th><th>Resources</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+      {% for f in files %}
+      <tr>
+        <td><a class="mono" href="/iac/edit?path={{ f.path }}">{{ f.path }}</a><div class="sub">{{ (f.size / 1024)|round(1) }} kB · {{ f.modified|ago }}</div></td>
+        <td>{% for e in f.envs %}<span class="chip">{{ e }}</span> {% endfor %}</td>
+        <td>{{ f.resources }}</td>
+        <td>{% if f.diagnostics %}<span class="badge s-down">{{ f.diagnostics|length }} problem{{ 's' if f.diagnostics|length != 1 }}</span>{% else %}<span class="badge s-up">valid</span>{% endif %}</td>
+        <td class="nowrap"><a href="/iac/edit?path={{ f.path }}">{{ 'Edit' if ui_edit else 'View' }}</a> · <a href="/iac/download?path={{ f.path }}">Download</a></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="muted">The workspace is empty. Create a file or import one.</p>{% endif %}
+  </section>
+
+  <section class="card">
+    {% if ui_edit %}
+    <h2>New file</h2>
+    <form method="post" action="/iac/new" class="stack">
+      <label>File name <input name="name" placeholder="device-pool.yaml" required pattern="[A-Za-z0-9_][A-Za-z0-9_./-]*"></label>
+      <label>Environment name <input name="env" placeholder="defaults to the file name" pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?"></label>
+      <label>Start from
+        <select name="starter">{% for k, label in starters.items() %}<option value="{{ k }}">{{ label }}</option>{% endfor %}</select>
+      </label>
+      <button>Create and edit</button>
+    </form>
+    <h2 class="gap">Import</h2>
+    <form method="post" action="/iac/import" enctype="multipart/form-data" class="stack">
+      <input type="file" name="files" multiple accept=".yaml,.yml,.zip" required>
+      <label class="inline"><input type="checkbox" name="overwrite" value="true"> Overwrite existing files</label>
+      <button>Import</button>
+      <p class="sub">.yaml / .yml files, or a .zip of a folder. Every file is validated after import.</p>
+    </form>
+    {% else %}
+    <h2>Read-only</h2>
+    <p class="muted">Editing from the web UI is disabled (<code>LABFORGE_UI_EDIT=0</code>).</p>
+    {% endif %}
+  </section>
+</div>
 
 {% if errors %}
 <section class="card">
-  <h2 class="err">Validation failed</h2>
-  <ul class="errors">{% for e in errors %}<li class="mono">{{ e }}</li>{% endfor %}</ul>
+  <h2 class="err">Problems</h2>
+  <ul class="errors">
+    {% for rel, d in errors %}
+    <li class="mono"><a href="/iac/edit?path={{ rel }}{{ '#L' ~ d.line if d.line }}">{{ rel }}{{ ':' ~ d.line if d.line }}</a> {{ d.message }}</li>
+    {% endfor %}
+  </ul>
+  <p class="sub">Plan and apply are available once every file is valid.</p>
 </section>
-{% elif plan %}
-{% set c = plan.counts() %}
-<section class="stats">
-  <div class="stat a-create"><div class="n">{{ c['create'] }}</div><div class="l">Create</div></div>
-  <div class="stat a-update"><div class="n">{{ c['update'] }}</div><div class="l">Update</div></div>
-  <div class="stat a-delete"><div class="n">{{ c['delete'] }}</div><div class="l">Delete</div></div>
-  <div class="stat"><div class="n">{{ c['noop'] }}</div><div class="l">Unchanged</div></div>
-</section>
+{% endif %}
 
+{% for file, env in envs %}
 <section class="card">
-  <h2>Apply</h2>
+  <div class="card-head">
+    <h2>{{ env.name }} <span class="chip tier-{{ env.tier }}">{{ TIER_LABEL.get(env.tier, env.tier) }}</span></h2>
+    <a class="mono sub" href="/iac/edit?path={{ file }}">{{ file }}</a>
+  </div>
+  {% if env.description %}<p class="sub">{{ env.description }}</p>{% endif %}
+  <div class="grid2 tight">
+    <table>
+      <thead><tr><th>Resource</th><th>Declaration</th><th>Depends on</th></tr></thead>
+      <tbody>
+      {% for r in env.resources %}
+      <tr>
+        <td><span class="kind k-{{ r.kind }}">{{ KIND_LABEL.get(r.kind, r.kind) }}</span><div class="mono">{{ r.name }}</div></td>
+        <td>{{ r.summary }}{% if r.details %}<div class="sub">{{ r.details|join(' · ') }}</div>{% endif %}</td>
+        <td class="sub">{{ r.depends_on|join(', ') or '—' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3" class="muted">No resources declared yet</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if env.resources %}<div class="graph"><pre class="mermaid">{{ env.mermaid }}</pre></div>{% endif %}
+  </div>
+</section>
+{% endfor %}
+
+{% if plan %}
+{% set c = plan.counts() %}
+<section class="card">
+  <div class="card-head">
+    <h2>Plan for the whole workspace</h2>
+    <span class="sub"><span class="act a-create">+{{ c['create'] }}</span> <span class="act a-update">~{{ c['update'] }}</span> <span class="act a-delete">-{{ c['delete'] }}</span> <span class="act a-noop">={{ c['noop'] }}</span></span>
+  </div>
   <form method="post" action="/iac/apply" class="apply">
-    <label><input type="checkbox" name="dry_run" value="true" checked {{ '' if ui_apply else 'disabled' }}> Dry-run (print the commands that would run; write no state)</label>
+    <label class="inline"><input type="checkbox" name="dry_run" value="true" checked {{ '' if ui_apply else 'disabled' }}> Dry-run (print the commands that would run; write no state)</label>
     {% if not ui_apply %}<input type="hidden" name="dry_run" value="true">{% endif %}
-    <label><input type="checkbox" name="allow_prod" value="true"> Allow changes to production</label>
+    <label class="inline"><input type="checkbox" name="allow_prod" value="true"> Allow changes to production</label>
     <button {{ 'disabled' if not plan.has_changes }}>Apply</button>
   </form>
-  {% if not ui_apply %}
-  <p class="muted">Real applies from the web UI are disabled (set <code>LABFORGE_UI_APPLY=1</code> to enable). To apply for real, use the CLI: <code>labforge apply {{ path }}</code></p>
-  {% endif %}
-</section>
-
-<section class="card">
-  <h2>Changes <span class="muted">(in dependency order)</span></h2>
+  {% if not ui_apply %}<p class="sub">Real applies from the web UI are disabled (set <code>LABFORGE_UI_APPLY=1</code> to enable). To apply for real, use the CLI: <code>labforge apply {{ root }}</code></p>{% endif %}
   <table>
     <thead><tr><th>Action</th><th>Resource</th><th>Tier</th><th>Changed fields</th></tr></thead>
     <tbody>
@@ -47,4 +149,10 @@
   </table>
 </section>
 {% endif %}
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs";
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  mermaid.initialize({ startOnLoad: true, theme: dark ? "dark" : "default", securityLevel: "strict" });
+</script>
 {% endblock %}

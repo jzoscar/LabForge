@@ -1,0 +1,244 @@
+{% extends "base.html" %}
+{% block title %}{{ path }}{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/yaml/yaml.min.js"></script>
+{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="mono">{{ path }}</h1>
+  <span id="status" class="badge s-unknown">checking…</span>
+  <div class="actions">
+    {% if ui_edit %}<button id="save" type="button" aria-label="Save" title="Save (Ctrl/⌘ + S)">Save</button>{% endif %}
+    <a class="btn" href="/iac/download?path={{ path }}">Download</a>
+    <form method="post" action="/iac/apply" class="inline-form needs-saved">
+      <input type="hidden" name="path" value="{{ path }}">
+      <input type="hidden" name="dry_run" value="true">
+      <button class="secondary" title="Plan and print every command for this file's environments, without changing anything">Dry-run apply</button>
+    </form>
+    {% if ui_apply %}
+    <form method="post" action="/iac/apply" class="inline-form needs-saved" onsubmit="return confirm('Apply {{ path }} for real?')">
+      <input type="hidden" name="path" value="{{ path }}">
+      <button class="danger">Apply</button>
+    </form>
+    {% endif %}
+    {% if ui_edit %}
+    <form method="post" action="/iac/delete" class="inline-form" onsubmit="return confirm('Delete {{ path }}? A copy is kept in its history.')">
+      <input type="hidden" name="path" value="{{ path }}">
+      <button class="ghost">Delete</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+<p id="notice" class="notice" hidden></p>
+
+<div class="editor-layout">
+  <aside class="card filelist">
+    <h2><a href="/iac">Workspace</a></h2>
+    <ul>
+      {% for f in files %}
+      <li class="{{ 'on' if f.path == path }}"><a class="mono" href="/iac/edit?path={{ f.path }}">{{ f.path }}</a>
+        {% if f.diagnostics %}<span class="dot err" title="{{ f.diagnostics|length }} problem(s)">●</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    <p class="sub"><a href="/iac/schema" target="_blank">Field reference ↗</a></p>
+  </aside>
+
+  <div class="editor-main card">
+    <textarea id="code" autocomplete="off"></textarea>
+  </div>
+
+  <aside class="card panel">
+    <nav class="tabs">
+      <button data-tab="problems" class="on">Problems <span id="problem-count" class="cnt"></span></button>
+      <button data-tab="structure">Structure</button>
+      <button data-tab="plan">Plan</button>
+      <button data-tab="history">History</button>
+    </nav>
+    <div id="tab-problems" class="tab"></div>
+    <div id="tab-structure" class="tab" hidden></div>
+    <div id="tab-plan" class="tab" hidden></div>
+    <div id="tab-history" class="tab" hidden><p class="muted">Loading…</p></div>
+  </aside>
+</div>
+
+<script>
+const PATH = {{ path|tojson }};
+const EDITABLE = {{ ui_edit|tojson }};
+let base = {{ digest|tojson }};
+// Taken from the server, not the textarea: browsers restore stale form text on reload.
+let saved = {{ text|tojson }};
+
+const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+const cm = CodeMirror.fromTextArea(document.getElementById("code"), {
+  mode: "yaml", lineNumbers: true, theme: dark ? "material-darker" : "default",
+  indentUnit: 2, tabSize: 2, indentWithTabs: false, readOnly: !EDITABLE, lineWrapping: false,
+  gutters: ["problems", "CodeMirror-linenumbers"],
+  extraKeys: {
+    Tab: (c) => c.somethingSelected() ? c.indentSelection("add") : c.execCommand("insertSoftTab"),
+    "Ctrl-S": () => save(), "Cmd-S": () => save(),
+  },
+});
+cm.setValue(saved);
+cm.clearHistory();
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const dirty = () => cm.getValue() !== saved;
+
+function notice(text, kind = "info") {
+  const n = $("notice");
+  n.hidden = !text; n.className = "notice " + kind; n.innerHTML = text || "";
+}
+
+function setStatus(problems) {
+  const s = $("status");
+  const unsaved = dirty() ? " · unsaved" : "";
+  if (problems === null) { s.className = "badge s-unknown"; s.textContent = "checking…"; return; }
+  s.className = "badge " + (problems ? "s-down" : "s-up");
+  s.textContent = (problems ? `${problems} problem${problems > 1 ? "s" : ""}` : "valid") + unsaved;
+}
+
+// --- validation, structure and plan preview of the unsaved buffer ---------
+let marked = [];
+let lastProblems = null;
+let checkSeq = 0;
+async function check() {
+  const seq = ++checkSeq;
+  const r = await fetch("/iac/check", {method: "POST", headers: {"Content-Type": "application/json"},
+                                       body: JSON.stringify({path: PATH, text: cm.getValue()})});
+  const data = await r.json();
+  if (seq !== checkSeq) return;  // a newer check is in flight; never render a stale result
+  marked.forEach((l) => cm.removeLineClass(l, "background", "line-error"));
+  cm.clearGutter("problems");
+  marked = [];
+  for (const d of data.diagnostics) {
+    if (!d.line) continue;
+    const ln = d.line - 1;
+    cm.addLineClass(ln, "background", "line-error");
+    const m = document.createElement("span"); m.className = "gutter-error"; m.textContent = "●"; m.title = d.message;
+    cm.setGutterMarker(ln, "problems", m);
+    marked.push(ln);
+  }
+  lastProblems = data.diagnostics.length;
+  $("problem-count").textContent = lastProblems || "";
+  setStatus(lastProblems);
+  renderProblems(data.diagnostics);
+  renderStructure(data.envs);
+  renderPlan(data.plan, data.diagnostics.length);
+}
+
+function renderProblems(diags) {
+  $("tab-problems").innerHTML = diags.length
+    ? "<ul class='problems'>" + diags.map((d) =>
+        `<li><a href="#" data-line="${d.line || 1}">${d.line ? "line " + d.line : "file"}</a> ${esc(d.message)}</li>`).join("") + "</ul>"
+    : "<p class='ok'>No problems. The schema and every cross-reference check passed.</p>";
+}
+
+let graphSeq = 0;
+async function renderStructure(envs) {
+  const el = $("tab-structure");
+  if (!envs.length) { el.innerHTML = "<p class='muted'>Fix the problems to see the parsed structure.</p>"; return; }
+  el.innerHTML = envs.map((e, i) => `
+    <h3>${esc(e.name)} <span class="chip tier-${esc(e.tier)}">${esc(e.tier)}</span></h3>
+    <ul class="outline">${e.resources.map((r) => `
+      <li><span class="kind k-${r.kind}">${r.kind}</span> <span class="mono">${esc(r.name)}</span>
+        <div class="sub">${esc(r.summary)}${r.dependsOn.length ? " · after " + esc(r.dependsOn.join(", ")) : ""}</div></li>`).join("")
+      || "<li class='muted'>No resources yet</li>"}</ul>
+    <div class="graph" id="graph-${i}"></div>`).join("");
+  try {
+    const {default: mermaid} = await import("https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs");
+    mermaid.initialize({startOnLoad: false, theme: dark ? "dark" : "default", securityLevel: "strict"});
+    for (const [i, e] of envs.entries()) {
+      if (!e.resources.length) continue;
+      const {svg} = await mermaid.render(`g${graphSeq++}`, e.mermaid);
+      $("graph-" + i).innerHTML = svg;
+    }
+  } catch (err) { /* graph is a nice-to-have; the outline above is the source of truth */ }
+}
+
+function renderPlan(plan, problems) {
+  const el = $("tab-plan");
+  if (!plan) {
+    el.innerHTML = `<p class="muted">${problems ? "Fix the problems to preview the plan." : "Nothing to plan."}</p>`;
+    return;
+  }
+  const c = plan.counts;
+  const sym = {create: "+", update: "~", delete: "-", noop: "="};
+  el.innerHTML = `<p class="sub">Preview of what applying the <b>editor contents</b> would change, against recorded state.</p>
+    <p><span class="act a-create">+${c.create}</span> <span class="act a-update">~${c.update}</span>
+       <span class="act a-delete">-${c.delete}</span> <span class="act a-noop">=${c.noop}</span></p>
+    <ul class="outline">${plan.changes.map((ch) => `<li class="${ch.action === "noop" ? "dim" : ""}">
+      <span class="act a-${ch.action}">${sym[ch.action]}</span> <span class="mono">${esc(ch.address)}</span>
+      ${ch.diff.length ? `<div class="sub mono">${esc(ch.diff.join(", "))}</div>` : ""}</li>`).join("")}</ul>`;
+}
+
+// --- history ---------------------------------------------------------------
+async function loadHistory() {
+  const r = await fetch(`/iac/history?path=${encodeURIComponent(PATH)}`);
+  const revs = await r.json();
+  $("tab-history").innerHTML = revs.length
+    ? "<p class='sub'>Every save and delete keeps the previous version. Loading one puts it in the editor; Save to restore it.</p><ul class='outline'>" +
+      revs.map((v) => `<li><a href="#" data-rev="${v.id}">${new Date(v.ts).toLocaleString()}</a> <span class="sub">${(v.size / 1024).toFixed(1)} kB</span></li>`).join("") + "</ul>"
+    : "<p class='muted'>No earlier versions yet. One is kept every time the file is saved.</p>";
+}
+
+document.addEventListener("click", async (e) => {
+  const line = e.target.dataset.line, rev = e.target.dataset.rev, tab = e.target.closest("[data-tab]");
+  if (line) { e.preventDefault(); jump(+line); }
+  if (rev) {
+    e.preventDefault();
+    if (dirty() && !confirm("Discard unsaved changes and load this version?")) return;
+    const r = await (await fetch(`/iac/revision?path=${encodeURIComponent(PATH)}&id=${rev}`)).json();
+    cm.setValue(r.text);
+    notice(`Loaded the version from ${esc(e.target.textContent)}. Save to restore it.`);
+  }
+  if (tab) {
+    document.querySelectorAll("[data-tab]").forEach((b) => b.classList.toggle("on", b === tab));
+    document.querySelectorAll(".tab").forEach((t) => t.hidden = t.id !== "tab-" + tab.dataset.tab);
+    if (tab.dataset.tab === "history") loadHistory();
+    if (tab.dataset.tab === "structure") cm.refresh();
+  }
+});
+
+function jump(line) {
+  cm.focus(); cm.setCursor({line: line - 1, ch: 0});
+  cm.scrollIntoView({line: line - 1, ch: 0}, 120);
+}
+
+// --- save ------------------------------------------------------------------
+async function save() {
+  if (!EDITABLE) return;
+  const text = cm.getValue();
+  const r = await fetch("/iac/save", {method: "POST", headers: {"Content-Type": "application/json"},
+                                      body: JSON.stringify({path: PATH, text, base})});
+  const data = await r.json();
+  if (!r.ok) {
+    notice(esc(data.error) + (r.status === 409 ? ` <a href="">Reload</a> (your edits will be lost — copy them first)` : ""), "error");
+    return;
+  }
+  base = data.digest; saved = text;
+  notice(data.problems ? `Saved with ${data.problems} problem(s). Apply stays blocked until they are fixed.` : "Saved.",
+         data.problems ? "warn" : "ok");
+  setStatus(lastProblems);
+}
+
+let timer;
+cm.on("change", () => { clearTimeout(timer); timer = setTimeout(check, 400); setStatus(lastProblems); });
+$("save")?.addEventListener("click", save);
+document.querySelectorAll("form.needs-saved").forEach((f) => f.addEventListener("submit", (e) => {
+  if (dirty()) { e.preventDefault(); notice("Save the file first: apply runs what is on disk.", "warn"); }
+}));
+addEventListener("beforeunload", (e) => { if (dirty()) e.preventDefault(); });
+
+check();
+function jumpToHash() {
+  const m = location.hash.match(/^#L(\d+)$/);
+  if (m) jump(+m[1]);
+}
+addEventListener("hashchange", jumpToHash);
+jumpToHash();
+</script>
+{% endblock %}

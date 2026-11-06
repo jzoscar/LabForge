@@ -7,15 +7,13 @@ from datetime import datetime
 from pathlib import Path
 
 import yaml
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 from sqlmodel import Session, select
 
-from labforge import service
 from labforge.api import get_session
-from labforge.iac.loader import LoadError
 from labforge.models import AgentReport, CheckResult, Event, ResourceState, Run, utcnow
 
 router = APIRouter(include_in_schema=False)
@@ -168,27 +166,6 @@ def resource_detail(address: str, request: Request, session: Session = Depends(g
         "spec_yaml": yaml.safe_dump(st.spec, sort_keys=False, allow_unicode=True),
         "outputs_yaml": yaml.safe_dump(st.outputs, sort_keys=False, allow_unicode=True),
     })
-
-
-@router.get("/iac", response_class=HTMLResponse)
-def iac(request: Request, session: Session = Depends(get_session)):
-    settings = request.app.state.settings
-    ctx: dict = {"nav": "iac", "path": settings.iac_path, "ui_apply": settings.ui_apply, "errors": None, "plan": None}
-    try:
-        _, ctx["plan"] = service.make_plan(session, settings.iac_path)
-    except LoadError as e:
-        ctx["errors"] = e.errors
-    return templates.TemplateResponse(request, "iac.html", ctx)
-
-
-@router.post("/iac/apply")
-def iac_apply(request: Request, dry_run: bool = Form(False), allow_prod: bool = Form(False)):
-    settings = request.app.state.settings
-    if not dry_run and not settings.ui_apply:
-        raise HTTPException(403, "real apply from the UI is disabled; set LABFORGE_UI_APPLY=1 or use the CLI")
-    run_id = service.start_run_background(request.app.state.engine, settings, settings.iac_path,
-                                          dry_run=dry_run, allow_prod=allow_prod, source="web")
-    return RedirectResponse(f"/runs/{run_id}", status_code=303)
 
 
 @router.get("/runs", response_class=HTMLResponse)

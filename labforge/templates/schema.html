@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Field reference{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>IaC field reference</h1>
+  <span class="muted">Generated from the schema LabForge validates against, so it is always current.</span>
+  <div class="actions"><a class="btn" href="/iac/schema.json" download="labforge.schema.json">JSON Schema</a></div>
+</div>
+
+<section class="card">
+  <h2>Editor integration</h2>
+  <p>Get completion and inline validation in VS Code (YAML extension) or any editor using yaml-language-server
+    by adding this first line to an IaC file:</p>
+  <pre># yaml-language-server: $schema=http://&lt;labforge&gt;:8000/iac/schema.json</pre>
+  <p class="sub">Secrets are never written in IaC: <code>credentialsRef</code>, <code>keyRef</code>, <code>passwordRef</code> and
+    <code>secretEnv</code> name a secret that is read from the <code>LABFORGE_SECRET_&lt;NAME&gt;</code> environment variable.
+    Any string may use <code>${VAR}</code> or <code>${VAR:-default}</code>.</p>
+</section>
+
+<nav class="card toc">
+  {% for s in sections %}<a href="#{{ s.path }}" class="mono">{{ s.path }}</a>{% endfor %}
+</nav>
+
+{% for s in sections %}
+<section class="card" id="{{ s.path }}">
+  <h2 class="mono">{{ s.path }}</h2>
+  <p class="sub">{{ s.description }}</p>
+  <table>
+    <thead><tr><th>Field</th><th>Type / allowed values</th><th>Required</th><th>Default</th></tr></thead>
+    <tbody>
+    {% for f in s.fields %}
+    <tr>
+      <td class="mono">{{ f.name }}</td>
+      <td>{% if f.type.startswith('→ ') %}<a class="mono" href="#{{ f.type[2:].replace(' (optional)', '') }}">{{ f.type }}</a>{% else %}<span class="mono">{{ f.type }}</span>{% endif %}</td>
+      <td>{{ 'yes' if f.required else '' }}</td>
+      <td class="mono sub">{{ f.default }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endfor %}
+{% endblock %}

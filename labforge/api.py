@@ -6,12 +6,14 @@ import hmac
 from collections.abc import Iterator
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from labforge import service
-from labforge.iac.loader import LoadError
+from labforge.iac.loader import LoadError, parse_text
+from labforge.iac.workspace import WorkspaceError
 from labforge.models import AgentReport, CheckResult, Event, ResourceState, Run
 
 router = APIRouter()
@@ -146,3 +148,59 @@ def get_run(run_id: int, session: Session = Depends(get_session)) -> dict:
 def agent_report(payload: AgentPayload, session: Session = Depends(get_session)) -> dict:
     report, managed = service.ingest_agent_report(session, payload.model_dump())
     return {"address": report.address, "managed": managed}
+
+
+# --- IaC workspace files ----------------------------------------------------
+
+
+def _ws_call(fn):
+    try:
+        return fn()
+    except WorkspaceError as e:
+        raise HTTPException(e.status, str(e)) from e
+
+
+class ValidateRequest(BaseModel):
+    text: str
+    path: str = "<buffer>"
+
+
+@router.get("/iac/files")
+def list_files(request: Request) -> list[dict]:
+    return [{"path": f.path, "size": f.size, "modified": f.modified, "digest": f.digest, "environments": f.envs,
+             "resources": f.resources, "problems": [str(d) for d in f.diagnostics]}
+            for f in request.app.state.settings.workspace().files()]
+
+
+@router.get("/iac/files/{path:path}")
+def get_file(path: str, request: Request) -> dict:
+    text, digest = _ws_call(lambda: request.app.state.settings.workspace().read(path))
+    return {"path": path, "digest": digest, "text": text}
+
+
+@router.put("/iac/files/{path:path}", dependencies=[Depends(require_token)])
+def put_file(path: str, request: Request, text: str = Body(..., media_type="text/plain"),
+             if_match: str | None = Header(default=None)) -> dict:
+    """Create or replace a file. Send the digest you edited from as If-Match to avoid overwriting others."""
+    digest = _ws_call(lambda: request.app.state.settings.workspace().write(path, text, if_match))
+    _, diags = parse_text(text, path)
+    return {"path": path, "digest": digest, "problems": [str(d) for d in diags]}
+
+
+@router.delete("/iac/files/{path:path}", dependencies=[Depends(require_token)], status_code=204)
+def delete_file(path: str, request: Request) -> Response:
+    _ws_call(lambda: request.app.state.settings.workspace().delete(path))
+    return Response(status_code=204)
+
+
+@router.post("/iac/validate")
+def validate(req: ValidateRequest) -> dict:
+    docs, diags = parse_text(req.text, req.path)
+    return {"valid": not diags, "environments": [d.metadata.name for d in docs],
+            "problems": [{"line": d.line, "message": d.message} for d in diags]}
+
+
+@router.get("/iac/export")
+def export_workspace(request: Request) -> Response:
+    return Response(request.app.state.settings.workspace().export_zip(), media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="labforge-iac.zip"'})

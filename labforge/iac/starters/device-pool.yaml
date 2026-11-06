@@ -1,0 +1,43 @@
+# Device test rig pool: ARM sensor devices on their own VLAN, power-cycled through a BMC.
+# Field reference: /iac/schema
+apiVersion: labforge/v1
+kind: Environment
+metadata:
+  name: __ENV__
+  tier: test
+  description: ARM device pool used by CI for on-device tests
+spec:
+  networks:
+    - name: rig-net
+      type: vlan
+      cidr: 10.40.0.0/16
+      subnets:
+        - { name: mgmt,    cidr: 10.40.0.0/24, gateway: 10.40.0.1, vlan: 400 }   # BMC / PDU
+        - { name: devices, cidr: 10.40.1.0/24, gateway: 10.40.1.1, vlan: 401 }
+
+  hosts:
+    - name: sensor-01
+      kind: baremetal
+      platform: { os: linux, arch: arm64 }
+      address: 10.40.1.11
+      subnet: rig-net/devices
+      bmc: { type: redfish, address: 10.40.0.11, credentialsRef: rig-bmc }
+      power: "on"
+      connection: { type: ssh, user: root, keyRef: rig-ssh-key }
+      monitor:
+        agent: true
+        probes: [ { type: ping }, { type: http, port: 80, path: /version } ]
+      labels: { pool: sensor-a, firmware: "1.0.0" }
+
+    - name: sensor-02
+      kind: baremetal
+      platform: { os: linux, arch: arm64 }
+      address: 10.40.1.12
+      subnet: rig-net/devices
+      bmc: { type: redfish, address: 10.40.0.12, credentialsRef: rig-bmc }
+      power: "on"
+      connection: { type: ssh, user: root, keyRef: rig-ssh-key }
+      monitor:
+        agent: true
+        probes: [ { type: ping }, { type: http, port: 80, path: /version } ]
+      labels: { pool: sensor-a, firmware: "1.0.0" }
