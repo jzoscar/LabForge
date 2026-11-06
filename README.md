@@ -81,6 +81,72 @@ In a second terminal, let this machine report as a piece of "test hardware":
 labforge agent --env local --name this-mac
 ```
 
+## Simulated lab (no hardware needed)
+
+`labforge sim run` starts three simulated ARM sensors on this machine. Each has a device HTTP API
+(`/version`, `/health`, firmware update) and a Redfish BMC (power state, reset, temperature), and faults
+can be injected to reproduce what goes wrong on real rigs:
+
+| Fault | What it models | What fixes it |
+|---|---|---|
+| `crash` | Firmware is dead, hardware is fine | A power cycle through the BMC |
+| `hang` | Device stops answering in time | A power cycle through the BMC |
+| `overheat` | Hardware problem (BMC reports Warning, 93 °C) | A person: it survives reboots |
+
+```bash
+labforge sim run                                   # terminal 1
+export LABFORGE_SECRET_SIM_BMC=admin:admin
+labforge apply infra/test/sim-lab.yaml -y          # real apply: power is checked over Redfish
+labforge sim fault sim-sensor-02 overheat          # inject a fault, watch the overview / Rigs page
+labforge sim status
+```
+
+## Device test rigs
+
+Hosts labelled `pool: <name>` form a rig pool that CI borrows devices from (the **Rigs** page shows
+every pool, who holds what, and why a device is quarantined).
+
+- **Checkout** health-checks a device *before* handing it out, using the same probes as monitoring. If it
+  fails, LabForge power-cycles it through the BMC and checks again ("fix, don't just file"); only a
+  healthy device is handed out, otherwise the next one is tried
+- **Two consecutive failed health checks quarantine** a device until a person returns it to the pool.
+  These are infrastructure failures, never test failures; a job can also report `infra-failed`
+- **Release** power-cycles the device back to a known state, whatever the test result
+- **Leases expire**, so a crashed job cannot hold a device forever
+- Checkouts are serialized, so two jobs never get the same device
+
+```bash
+labforge rig list
+labforge rig checkout --pool sim-sensor --holder "$CI_JOB_URL" --output env   # exit code 2: none available
+labforge rig release <lease-id> --result passed|failed|infra-failed
+```
+
+REST: `GET /api/v1/rigs`, `POST /api/v1/rigs/checkout`, `POST /api/v1/rigs/leases/{id}/release`,
+`POST /api/v1/rigs/leases/{id}/renew`, `GET /api/v1/rigs/leases`, `POST /api/v1/rigs/devices/{address}/unquarantine`.
+
+A GitHub Actions job on a self-hosted runner in the lab (the same three commands work in Bamboo or
+Bitbucket Pipelines):
+
+```yaml
+on-device-tests:
+  runs-on: [self-hosted, linux, rig-sensor-a]
+  needs: cross-arm64
+  env:
+    LABFORGE_SERVER: http://labforge.lab:8000
+    LABFORGE_API_TOKEN: ${{ secrets.LABFORGE_API_TOKEN }}
+  steps:
+    - uses: actions/download-artifact@v4
+      with: { name: firmware-arm64 }
+    - name: Borrow a device
+      run: labforge rig checkout --pool sensor-a --holder "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --output env >> "$GITHUB_ENV"
+    - name: Test on the device
+      id: test
+      run: ./run-device-tests --device "$LABFORGE_DEVICE_HTTP"
+    - name: Return the device
+      if: always()
+      run: labforge rig release "$LABFORGE_LEASE_ID" --result ${{ steps.test.outcome == 'success' && 'passed' || 'failed' }}
+```
+
 ## Managing your lab
 
 `infra/` declares a complete set of R&D environments, one folder per tier. Each environment's size
@@ -244,6 +310,8 @@ boards; on Windows, rely on the BMC (Redfish) for temperatures.
 | `labforge/iac/workspace.py` · `inspect.py` | IaC files (safe paths, conflicts, history, import/export); parsed views and field reference |
 | `labforge/monitor/` | Async probes, health sweeps, status aggregation |
 | `labforge/api.py` · `web.py` · `web_iac.py` · `templates/` | Backend API and web pages |
+| `labforge/rigs.py` · `web_rigs.py` | Device test rigs: checkout, health check, self-healing, quarantine, release |
+| `labforge/sim.py` | Simulated ARM sensors with Redfish BMCs and fault injection |
 | `labforge/agent.py` | Host agent |
 
 ## Configuration
@@ -272,8 +340,8 @@ pytest
 | Milestone | Status | Goal |
 |---|---|---|
 | **M0 Platform foundation** | ✅ Done (v0.1.0) | IaC, plan/apply, drivers, monitoring, agent, web console, IaC workspace |
-| **M1 Build & test lab onboarding** | 🚧 Next | Device pools, build machines, runners and cache services all managed as code |
-| **M2 Device test rigs (on-device CI)** | ⏳ Planned | CI checks out a device, flashes it, runs on-device tests, then returns and restores it |
+| **M1 Build & test lab onboarding** | 🚧 In progress | Device pools, build machines, runners and cache services all managed as code |
+| **M2 Device test rigs (on-device CI)** | 🚧 Core done | CI checks out a device, flashes it, runs on-device tests, then returns and restores it |
 | **M3 Alerting & on-call** | ⏳ Planned | Push problems to the right person via Slack / Teams / WhatsApp / SMS |
 | **M4 Build farm capacity & speed** | ⏳ Planned | Short queues, warm caches, build time that is measured and optimised |
 | **M5 Security, compliance & GitOps** | ⏳ Planned | Safe multi-user operation and CRA traceability |
@@ -291,6 +359,8 @@ pytest
 
 ### M1 Build & test lab onboarding 🚧
 
+- [x] Full environment set declared: dev (module), test-unit (device rig), test-integration (full chain), staging (pre-production), demo (showcase)
+- [x] Simulated device lab (`labforge sim`): ARM sensors with Redfish BMCs and fault injection, declared in `infra/test/sim-lab.yaml` and applied for real
 - [ ] Declare the whole lab in IaC:
   - Device pools: ARM sensor devices grouped by product family (labelled with firmware version and serial number)
   - Build machines: Linux Docker build hosts, Windows MSVC build machines
@@ -306,13 +376,17 @@ pytest
 
 QEMU proves the ARM binary runs; it does not prove the product works on the device.
 
-- [ ] Device checkout / return API: borrow a device from a pool by label and lock it, with timeout-based auto-return
-- [ ] Pre-test health check (boot, network, version endpoint); a failure is recorded as an **infrastructure failure**, not a test failure
-- [ ] Flash firmware / deploy build artifacts; on return, always restore the known-good image, whether the tests passed or failed
-- [ ] Self-healing devices: power-cycle through the BMC or a **PDU** (so devices without a BMC can still be hard-reset); quarantine a device after two failed health checks
-- [ ] CI integration: Bamboo, Bitbucket Pipelines and GitHub Actions jobs borrow devices through the same API
+- [x] Device checkout / return API: borrow a device from a pool by label and lock it, with timeout-based auto-return
+- [x] Pre-test health check (boot, network, version endpoint); a failure is recorded as an **infrastructure failure**, not a test failure
+- [x] On return, always power-cycle the device back to a known state, whether the tests passed or failed
+- [ ] Flash firmware / deploy build artifacts, and restore a known-good **image** on return (not just a power cycle)
+- [x] Self-healing through the BMC: a device that fails its health check is power-cycled and re-checked; quarantined after two failed health checks
+- [ ] Hard reset through a **PDU** for devices without a BMC
+- [x] CLI and REST API any CI system can call (`labforge rig checkout / release`), with a GitHub Actions example
+- [ ] Ready-made Bamboo and Bitbucket Pipelines steps
 - [ ] BuildPulse integration: test results go into `report.json` with device ID and firmware version in the environment; failures go through `buildpulse triage`
-- [ ] Rig dashboard: device utilisation, queue time, failure causes (code / device / network); flaky tests tracked separately
+- [x] Rigs page: pool state, holders, lease expiry, quarantine reasons, lease history
+- [ ] Rig trends: device utilisation, queue time, failure causes (code / device / network); flaky tests tracked separately
 
 ### M3 Alerting & on-call
 

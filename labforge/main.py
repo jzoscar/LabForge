@@ -15,6 +15,7 @@ from labforge.db import make_engine
 from labforge.monitor.sweep import Monitor
 from labforge.web import router as web_router
 from labforge.web_iac import router as iac_router
+from labforge.web_rigs import router as rigs_router
 
 log = logging.getLogger("labforge")
 
@@ -38,5 +39,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(api_router, prefix="/api/v1")
     app.include_router(web_router)
     app.include_router(iac_router)
+    app.include_router(rigs_router)
     app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
     return app

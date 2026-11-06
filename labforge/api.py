@@ -204,3 +204,85 @@ def validate(req: ValidateRequest) -> dict:
 def export_workspace(request: Request) -> Response:
     return Response(request.app.state.settings.workspace().export_zip(), media_type="application/zip",
                     headers={"Content-Disposition": 'attachment; filename="labforge-iac.zip"'})
+
+
+# --- device test rigs ---------------------------------------------------------
+
+
+class CheckoutRequest(BaseModel):
+    pool: str
+    holder: str
+    ttl_seconds: int = 1800
+    purpose: str = ""
+
+
+class ReleaseRequest(BaseModel):
+    result: str
+    restore: bool = True
+
+
+class RenewRequest(BaseModel):
+    ttl_seconds: int = 1800
+
+
+def _rig_call(fn):
+    from labforge.rigs import RigError
+
+    try:
+        return fn()
+    except RigError as e:
+        raise HTTPException(e.status, e.detail) from e
+
+
+@router.get("/rigs")
+def rig_pools(session: Session = Depends(get_session)) -> list[dict]:
+    from labforge.rigs import lease_view, overview
+
+    return [{"pool": p["pool"], "free": p["free"], "devices": [
+        {"device": d["state"].name, "address": d["state"].address, "status": d["state"].status, "rig": d["rig"],
+         "consecutiveFailures": d["health"].consecutive_failures, "quarantineReason": d["health"].reason,
+         "lease": lease_view(d["lease"], d["state"]) if d["lease"] else None}
+        for d in p["devices"]]} for p in overview(session)]
+
+
+@router.post("/rigs/checkout", dependencies=[Depends(require_token)], status_code=201)
+def rig_checkout(req: CheckoutRequest, request: Request) -> dict:
+    """Borrow a healthy device from a pool. 409 when none is free and healthy."""
+    from labforge import rigs
+
+    return _rig_call(lambda: rigs.checkout(request.app.state.engine, req.pool, req.holder,
+                                           ttl_seconds=req.ttl_seconds, purpose=req.purpose))
+
+
+@router.post("/rigs/leases/{lease_id}/release", dependencies=[Depends(require_token)])
+def rig_release(lease_id: int, req: ReleaseRequest, request: Request) -> dict:
+    from labforge import rigs
+
+    return _rig_call(lambda: rigs.release(request.app.state.engine, lease_id, req.result, restore=req.restore))
+
+
+@router.post("/rigs/leases/{lease_id}/renew", dependencies=[Depends(require_token)])
+def rig_renew(lease_id: int, req: RenewRequest, request: Request) -> dict:
+    from labforge import rigs
+
+    return _rig_call(lambda: rigs.renew(request.app.state.engine, lease_id, req.ttl_seconds))
+
+
+@router.get("/rigs/leases")
+def rig_leases(active: bool = False, limit: int = 100, session: Session = Depends(get_session)) -> list[dict]:
+    from labforge.models import Lease
+    from labforge.rigs import lease_view
+
+    q = select(Lease).order_by(Lease.id.desc()).limit(min(limit, 1000))
+    if active:
+        q = q.where(Lease.status == "active")
+    states = {s.address: s for s in session.exec(select(ResourceState))}
+    return [lease_view(lease, states.get(lease.address)) for lease in session.exec(q)]
+
+
+@router.post("/rigs/devices/{address}/unquarantine", dependencies=[Depends(require_token)], status_code=204)
+def rig_unquarantine(address: str, request: Request) -> Response:
+    from labforge import rigs
+
+    _rig_call(lambda: rigs.unquarantine(request.app.state.engine, address))
+    return Response(status_code=204)

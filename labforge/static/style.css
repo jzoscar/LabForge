@@ -71,6 +71,10 @@ tr.dim td { opacity: .55; }
 .s-degraded.badge, .r-running { background: var(--warn-bg); color: var(--warn); }
 .s-down.badge, .r-failed { background: var(--err-bg); color: var(--err); }
 .s-unknown.badge { background: var(--unk-bg); color: var(--unk); }
+.s-quarantined.badge, .rig-quarantined, .res-failed, .res-infra-failed { background: var(--err-bg); color: var(--err); }
+.rig-free, .res-passed { background: var(--ok-bg); color: var(--ok); }
+.rig-leased, .rig-active { background: var(--warn-bg); color: var(--warn); }
+.rig-released, .rig-expired { background: var(--unk-bg); color: var(--unk); }
 
 .chip { display: inline-block; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; font-size: 11.5px; color: var(--muted); }
 .chip.arch-arm64, .chip.arch-armv7 { color: var(--accent); border-color: var(--accent); }

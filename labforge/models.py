@@ -93,3 +93,30 @@ class AgentReport(SQLModel, table=True):
     @property
     def payload(self) -> dict:
         return json.loads(self.payload_json or "{}")
+
+
+class Lease(SQLModel, table=True):
+    """A device checked out of a rig pool, usually by a CI job."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    address: str = Field(index=True)  # resource address of the device
+    pool: str = Field(index=True)
+    holder: str  # who has it, e.g. "github:org/repo#1234"
+    purpose: str = ""
+    status: str = Field(default="active", index=True)  # active | released | expired
+    result: str | None = None  # passed | failed | infra-failed
+    acquired_at: datetime = Field(default_factory=utcnow)
+    expires_at: datetime
+    released_at: datetime | None = None
+    note: str = ""
+
+
+class DeviceHealth(SQLModel, table=True):
+    """Rig bookkeeping per device: consecutive failed health checks and quarantine."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    address: str = Field(index=True, unique=True)
+    consecutive_failures: int = 0
+    quarantined: bool = False
+    reason: str = ""
+    updated_at: datetime = Field(default_factory=utcnow)

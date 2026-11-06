@@ -1,0 +1,55 @@
+# Test (simulated): a device rig that runs entirely on this machine.
+# Start the simulator with `labforge sim run`, set LABFORGE_SECRET_SIM_BMC=admin:admin, then this
+# environment can be applied for real: power is checked through each simulated Redfish BMC, the
+# devices are monitored, and CI can check them out from the `sim-sensor` pool.
+apiVersion: labforge/v1
+kind: Environment
+metadata:
+  name: sim-lab
+  tier: test
+  description: Simulated ARM sensor rig on localhost - the full rig workflow without hardware
+  labels: { scope: simulated, module: sensor-firmware }
+spec:
+  networks:
+    - name: sim-net
+      type: physical
+      cidr: 127.0.0.0/24
+      subnets:
+        - { name: lo, cidr: 127.0.0.0/24, gateway: 127.0.0.1 }
+
+  hosts:
+    - name: sim-sensor-01
+      kind: baremetal
+      platform: { os: linux, arch: arm64 }
+      address: 127.0.0.1
+      subnet: sim-net/lo
+      bmc: { type: redfish, address: "http://127.0.0.1:9112", credentialsRef: sim-bmc }
+      power: "on"
+      connection: { type: none }
+      monitor:
+        probes: [ { type: http, port: 9111, path: /version }, { type: http, port: 9111, path: /health } ]
+      labels: { pool: sim-sensor, role: sensor }
+
+    - name: sim-sensor-02
+      kind: baremetal
+      platform: { os: linux, arch: arm64 }
+      address: 127.0.0.1
+      subnet: sim-net/lo
+      bmc: { type: redfish, address: "http://127.0.0.1:9122", credentialsRef: sim-bmc }
+      power: "on"
+      connection: { type: none }
+      monitor:
+        probes: [ { type: http, port: 9121, path: /version }, { type: http, port: 9121, path: /health } ]
+      labels: { pool: sim-sensor, role: sensor }
+
+    - name: sim-sensor-03
+      kind: baremetal
+      platform: { os: linux, arch: arm64 }
+      address: 127.0.0.1
+      subnet: sim-net/lo
+      bmc: { type: redfish, address: "http://127.0.0.1:9132", credentialsRef: sim-bmc }
+      power: "on"
+      connection: { type: none }
+      monitor:
+        probes: [ { type: http, port: 9131, path: /version }, { type: http, port: 9131, path: /health } ]
+      labels: { pool: sim-sensor, role: sensor }

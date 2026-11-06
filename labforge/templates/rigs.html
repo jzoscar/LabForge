@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge %}
+{% block title %}Device rigs{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Device test rigs</h1>
+  <span class="muted">CI borrows devices from a pool, tests on them, and returns them restored.</span>
+</div>
+
+{% if message %}<p class="notice ok">{{ message }}</p>{% endif %}
+{% if error %}<p class="notice error">{{ error }}</p>{% endif %}
+
+<section class="stats">
+  <div class="stat"><div class="n">{{ total }}</div><div class="l">Rig devices</div></div>
+  <div class="stat s-up"><div class="n">{{ counts.free }}</div><div class="l">Free</div></div>
+  <div class="stat {{ 's-degraded' if counts.leased }}"><div class="n">{{ counts.leased }}</div><div class="l">Checked out</div></div>
+  <div class="stat {{ 's-down' if counts.quarantined }}"><div class="n">{{ counts.quarantined }}</div><div class="l">Quarantined</div></div>
+</section>
+
+{% if not pools %}
+<section class="card empty">
+  <h2>No rig pools yet</h2>
+  <p>Label hosts with <code>pool: &lt;name&gt;</code> in IaC and apply them. To try it without hardware:
+    <code>labforge sim run</code>, then apply <code>infra/test/sim-lab.yaml</code>.</p>
+</section>
+{% endif %}
+
+{% for p in pools %}
+<section class="card">
+  <div class="card-head">
+    <h2>Pool <span class="mono">{{ p.pool }}</span> <span class="sub">{{ p.free }} of {{ p.devices|length }} ready</span></h2>
+    {% if ui_edit %}
+    <form method="post" action="/rigs/checkout" class="apply inline-form">
+      <input type="hidden" name="pool" value="{{ p.pool }}">
+      <input name="holder" placeholder="holder, e.g. you@example.com" required size="26">
+      <select name="ttl_minutes"><option value="15">15 min</option><option value="30" selected>30 min</option><option value="120">2 h</option></select>
+      <button>Check out a device</button>
+    </form>
+    {% endif %}
+  </div>
+  <table>
+    <thead><tr><th>Device</th><th>Health</th><th>Rig state</th><th>Holder</th><th>Failed checks</th><th></th></tr></thead>
+    <tbody>
+    {% for d in p.devices %}
+    {% set s = d.state %}
+    <tr>
+      <td><a href="/resources/{{ s.address }}">{{ s.name }}</a><div class="sub mono">{{ s.spec.address }} · {{ s.env }}</div></td>
+      <td>{{ badge(s.status) }}{% if s.status_detail %}<div class="sub err">{{ s.status_detail|truncate(70) }}</div>{% endif %}</td>
+      <td><span class="badge rig-{{ d.rig }}">{{ d.rig }}</span>{% if d.rig == 'quarantined' %}<div class="sub err">{{ d.health.reason|truncate(80) }}</div>{% endif %}</td>
+      <td>{% if d.lease %}{{ d.lease.holder }}<div class="sub">lease #{{ d.lease.id }} · expires {{ d.lease.expires_at|until }}</div>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td>{{ d.health.consecutive_failures }}</td>
+      <td class="nowrap">
+        {% if ui_edit and d.lease %}
+        <form method="post" action="/rigs/release" class="inline-form">
+          <input type="hidden" name="lease_id" value="{{ d.lease.id }}">
+          <select name="result"><option>passed</option><option>failed</option><option>infra-failed</option></select>
+          <button class="secondary">Return</button>
+        </form>
+        {% elif ui_edit and d.rig == 'quarantined' %}
+        <form method="post" action="/rigs/unquarantine" class="inline-form">
+          <input type="hidden" name="address" value="{{ s.address }}">
+          <button class="secondary">Back to pool</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endfor %}
+
+{% if history %}
+<section class="card">
+  <h2>Recent leases</h2>
+  <table>
+    <thead><tr><th>#</th><th>Device</th><th>Holder</th><th>Status</th><th>Result</th><th>Held</th><th>Notes</th></tr></thead>
+    <tbody>
+    {% for lease, s in history %}
+    <tr>
+      <td>{{ lease.id }}</td>
+      <td class="mono">{{ s.name if s else lease.address }}</td>
+      <td>{{ lease.holder }}</td>
+      <td><span class="badge rig-{{ lease.status }}">{{ lease.status }}</span></td>
+      <td>{% if lease.result %}<span class="badge res-{{ lease.result }}">{{ lease.result }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td class="sub">{{ lease.acquired_at|ago }}{% if lease.released_at %} · {{ ((lease.released_at - lease.acquired_at).total_seconds() / 60)|round(1) }} min{% endif %}</td>
+      <td class="sub">{{ lease.note }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>From CI</h2>
+  <pre>lease=$(labforge rig checkout --pool sim-sensor --holder "$CI_JOB_URL" --output env)
+eval "$lease"                               # LABFORGE_LEASE_ID, LABFORGE_DEVICE, LABFORGE_DEVICE_HTTP ...
+./run-device-tests "$LABFORGE_DEVICE_HTTP"; status=$?
+labforge rig release "$LABFORGE_LEASE_ID" --result $([ $status = 0 ] &amp;&amp; echo passed || echo failed)</pre>
+</section>
+{% endblock %}

@@ -201,6 +201,9 @@ class Monitor:
                 s.add(st)
                 statuses[t.address] = status
 
+            from labforge.rigs import expire_leases  # local import: rigs builds on this module
+
+            expire_leases(s)
             keep = timedelta(hours=self.settings.retention_hours)
             s.exec(delete(AgentReport).where(AgentReport.ts < now - keep))
             s.exec(delete(Event).where(Event.ts < now - keep * 7))

@@ -1,0 +1,271 @@
+"""Device test rigs: CI checks devices out of a pool, tests on them, and returns them.
+
+Rules (milestone 2):
+- A device belongs to a pool through its IaC label `pool: <name>`.
+- Checkout health-checks a device *before* handing it out, with the same probes the
+  monitor uses. A device that fails is power-cycled through its BMC and checked again
+  ("fix, don't just file"); if it is still unhealthy, the next device is tried.
+- Two consecutive failed health checks quarantine a device until a person clears it.
+  Those failures are infrastructure failures, never test failures.
+- Returning a device power-cycles it back to a known-good state, whatever the result.
+- Leases expire, so a crashed CI job cannot hold a device forever.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import threading
+import time
+from dataclasses import dataclass
+from datetime import timedelta
+
+from sqlalchemy.engine import Engine
+from sqlmodel import Session, select
+
+from labforge.iac.providers.bmc import power_cycle
+from labforge.iac.secrets import SecretResolver
+from labforge.iac.spec import Host
+from labforge.models import DeviceHealth, Event, Lease, ResourceState, utcnow
+from labforge.monitor.probes import ProbeResult
+from labforge.monitor.sweep import Target, check_target
+
+POOL_LABEL = "pool"
+QUARANTINE_AFTER = 2
+RESULTS = {"passed", "failed", "infra-failed"}
+
+_checkout_lock = threading.Lock()
+
+
+class RigError(Exception):
+    def __init__(self, message: str, status: int = 400, **detail):
+        self.status = status
+        self.detail = {"error": message, **detail}
+        super().__init__(message)
+
+
+@dataclass
+class Health:
+    healthy: bool
+    summary: str
+    results: list[ProbeResult]
+
+
+def pool_of(state: ResourceState) -> str | None:
+    return state.spec.get("labels", {}).get(POOL_LABEL) if state.kind == "host" else None
+
+
+def pool_members(session: Session, pool: str | None = None) -> list[ResourceState]:
+    hosts = session.exec(select(ResourceState).where(ResourceState.kind == "host").order_by(ResourceState.address))
+    return [h for h in hosts if pool_of(h) and (pool is None or pool_of(h) == pool)]
+
+
+def _health_row(session: Session, address: str) -> DeviceHealth:
+    row = session.exec(select(DeviceHealth).where(DeviceHealth.address == address)).first()
+    return row or DeviceHealth(address=address)
+
+
+def _active_lease(session: Session, address: str) -> Lease | None:
+    return session.exec(select(Lease).where(Lease.address == address, Lease.status == "active")).first()
+
+
+# --- health ---------------------------------------------------------------
+
+
+def check(state: ResourceState, secrets: SecretResolver) -> Health:
+    host = Host.model_validate(state.spec)
+    target = Target(state.address, state.env, state.kind, state.name, state.spec)
+    results = asyncio.run(check_target(target, {state.address: host}, secrets))
+    failing = [r for r in results if r.ok is False]
+    passing = [r for r in results if r.ok]
+    healthy = bool(passing) and not failing
+    summary = "; ".join(f"{r.probe}: {r.detail}" for r in failing) or "all probes passed"
+    return Health(healthy, summary[:300], results)
+
+
+def _record(session: Session, state: ResourceState, healthy: bool, reason: str) -> DeviceHealth:
+    row = _health_row(session, state.address)
+    if healthy:
+        row.consecutive_failures = 0
+    else:
+        row.consecutive_failures += 1
+        if row.consecutive_failures >= QUARANTINE_AFTER and not row.quarantined:
+            row.quarantined, row.reason = True, reason
+            session.add(Event(address=state.address, old_status=state.status, new_status="quarantined",
+                              detail=f"quarantined after {row.consecutive_failures} failed health checks: {reason}"))
+    row.updated_at = utcnow()
+    session.add(row)
+    session.commit()
+    return row
+
+
+def _heal(state: ResourceState, secrets: SecretResolver, wait_seconds: float) -> tuple[Health | None, str]:
+    """Power-cycle through the BMC and wait for the device to come back healthy."""
+    host = Host.model_validate(state.spec)
+    if not host.bmc:
+        return None, "no BMC to power-cycle"
+    try:
+        power_cycle(host.bmc, secrets)
+    except Exception as e:  # BMC unreachable or refused: still an infrastructure failure
+        return None, f"power cycle failed: {e}"
+    deadline = time.monotonic() + wait_seconds
+    health = check(state, secrets)
+    while not health.healthy and time.monotonic() < deadline:
+        time.sleep(0.5)
+        health = check(state, secrets)
+    return health, "power-cycled via BMC"
+
+
+# --- checkout / release -----------------------------------------------------
+
+
+def lease_view(lease: Lease, state: ResourceState | None) -> dict:
+    spec = state.spec if state else {}
+    host = spec.get("address")
+    probes = spec.get("monitor", {}).get("probes") or []
+    http_port = next((p.get("port") for p in probes if p.get("type") == "http" and p.get("port")), None)
+    return {
+        "leaseId": lease.id, "pool": lease.pool, "holder": lease.holder, "status": lease.status,
+        "result": lease.result, "device": state.name if state else lease.address.rsplit(".", 1)[-1],
+        "address": lease.address, "host": host,
+        "endpoints": {k: v for k, v in {
+            "http": f"http://{host}:{http_port}" if host and http_port else None,
+            "bmc": (spec.get("bmc") or {}).get("address"),
+        }.items() if v},
+        "platform": spec.get("platform"), "labels": spec.get("labels", {}),
+        "acquiredAt": lease.acquired_at, "expiresAt": lease.expires_at, "releasedAt": lease.released_at,
+        "note": lease.note,
+    }
+
+
+def checkout(engine: Engine, pool: str, holder: str, *, ttl_seconds: int = 1800, purpose: str = "",
+             secrets: SecretResolver | None = None, heal_wait: float = 15.0) -> dict:
+    secrets = secrets or SecretResolver()
+    if not holder.strip():
+        raise RigError("holder is required (e.g. the CI job URL)")
+    # One checkout at a time, so two jobs never get the same device.
+    with _checkout_lock, Session(engine) as session:
+        members = pool_members(session, pool)
+        if not members:
+            raise RigError(f"unknown or empty pool {pool!r}", 404)
+        free = []
+        busy = quarantined = 0
+        for m in members:
+            if _health_row(session, m.address).quarantined:
+                quarantined += 1
+            elif _active_lease(session, m.address):
+                busy += 1
+            else:
+                free.append(m)
+        # Devices the monitor already sees as up go first.
+        free.sort(key=lambda m: (m.status != "up", m.name))
+
+        tried = []
+        for state in free:
+            health = check(state, secrets)
+            note = ""
+            if not health.healthy:
+                row = _record(session, state, False, health.summary)
+                if not row.quarantined:
+                    healed, how = _heal(state, secrets, heal_wait)
+                    note = f"failed health check ({health.summary}); {how}"
+                    if healed is not None:
+                        health = healed
+                if not health.healthy:
+                    _record(session, state, False, health.summary)
+                    tried.append({"device": state.name, "reason": health.summary,
+                                  "quarantined": _health_row(session, state.address).quarantined})
+                    continue
+            _record(session, state, True, "")
+            lease = Lease(address=state.address, pool=pool, holder=holder.strip(), purpose=purpose,
+                          expires_at=utcnow() + timedelta(seconds=ttl_seconds),
+                          note=(note + "; healthy after recovery") if note else "")
+            session.add(lease)
+            session.commit()
+            session.refresh(lease)
+            return {**lease_view(lease, state), "tried": tried}
+
+        raise RigError(f"no healthy device available in pool {pool!r}", 409,
+                       busy=busy, quarantined=quarantined, tried=tried)
+
+
+def release(engine: Engine, lease_id: int, result: str, *, secrets: SecretResolver | None = None,
+            restore: bool = True) -> dict:
+    if result not in RESULTS:
+        raise RigError(f"result must be one of {sorted(RESULTS)}")
+    secrets = secrets or SecretResolver()
+    with Session(engine) as session:
+        lease = session.get(Lease, lease_id)
+        if not lease:
+            raise RigError(f"lease {lease_id} not found", 404)
+        if lease.status != "active":
+            raise RigError(f"lease {lease_id} is already {lease.status}", 409)
+        state = session.exec(select(ResourceState).where(ResourceState.address == lease.address)).first()
+        notes = []
+        if state and result == "infra-failed":
+            _record(session, state, False, f"reported infra-failed by {lease.holder}")
+            notes.append("infrastructure failure recorded")
+        if restore and state:
+            host = Host.model_validate(state.spec)
+            if host.bmc:
+                try:
+                    power_cycle(host.bmc, secrets)
+                    notes.append("restored: power-cycled via BMC")
+                except Exception as e:
+                    notes.append(f"restore failed: {e}")
+            else:
+                notes.append("no BMC; not restored")
+        lease.status, lease.result, lease.released_at = "released", result, utcnow()
+        lease.note = "; ".join(filter(None, [lease.note, *notes]))
+        session.add(lease)
+        session.commit()
+        session.refresh(lease)
+        return lease_view(lease, state)
+
+
+def renew(engine: Engine, lease_id: int, ttl_seconds: int) -> dict:
+    with Session(engine) as session:
+        lease = session.get(Lease, lease_id)
+        if not lease or lease.status != "active":
+            raise RigError(f"lease {lease_id} is not active", 409)
+        lease.expires_at = utcnow() + timedelta(seconds=ttl_seconds)
+        session.add(lease)
+        session.commit()
+        session.refresh(lease)
+        state = session.exec(select(ResourceState).where(ResourceState.address == lease.address)).first()
+        return lease_view(lease, state)
+
+
+def unquarantine(engine: Engine, address: str) -> None:
+    with Session(engine) as session:
+        row = session.exec(select(DeviceHealth).where(DeviceHealth.address == address)).first()
+        if not row or not row.quarantined:
+            raise RigError(f"{address} is not quarantined", 409)
+        row.quarantined, row.consecutive_failures, row.reason, row.updated_at = False, 0, "", utcnow()
+        session.add(row)
+        session.add(Event(address=address, old_status="quarantined", new_status="unknown",
+                          detail="released from quarantine"))
+        session.commit()
+
+
+def expire_leases(session: Session) -> int:
+    now = utcnow()
+    expired = list(session.exec(select(Lease).where(Lease.status == "active", Lease.expires_at < now)))
+    for lease in expired:
+        lease.status, lease.released_at = "expired", now
+        lease.note = "; ".join(filter(None, [lease.note, "lease expired; device returned to the pool"]))
+        session.add(lease)
+    return len(expired)
+
+
+def overview(session: Session) -> list[dict]:
+    """Pools with each device's rig state: free | leased | quarantined."""
+    pools: dict[str, list] = {}
+    for state in pool_members(session):
+        health = _health_row(session, state.address)
+        lease = _active_lease(session, state.address)
+        rig_state = "quarantined" if health.quarantined else ("leased" if lease else "free")
+        pools.setdefault(pool_of(state), []).append(
+            {"state": state, "rig": rig_state, "lease": lease, "health": health})
+    return [{"pool": name, "devices": devices,
+             "free": sum(1 for d in devices if d["rig"] == "free" and d["state"].status == "up")}
+            for name, devices in sorted(pools.items())]

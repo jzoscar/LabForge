@@ -137,7 +137,7 @@ def test_service_dry_run_writes_no_state(engine, settings):
     run = service.execute_run(engine, settings, run_id, ROOT / "infra", dry_run=True)
     assert run.status == "success", run.log
     assert "[dry-run] $ ipmitool" in run.log and "hunter2" not in run.log
-    assert run.summary["applied"]["create"] == 38
+    assert run.summary["applied"]["create"] == 42
     from sqlmodel import Session
     with Session(engine) as s:
         assert list(s.exec(select(ResourceState))) == []

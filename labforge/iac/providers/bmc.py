@@ -77,3 +77,19 @@ def ensure_power(ctx: ApplyContext, host: Host, desired: str) -> str:
             rf.reset("On" if desired == "on" else "GracefulShutdown")
             ctx.log(f"    reset requested -> {desired}")
     return desired
+
+
+def power_cycle(bmc: Bmc, secrets: SecretResolver, timeout: float = 15) -> None:
+    """Hard power cycle outside an apply (rig self-healing, restoring a returned device)."""
+    if bmc.type == "ipmi":
+        import os
+        import subprocess
+
+        user, password = secrets.credentials(bmc.credentials_ref)
+        p = subprocess.run(ipmi_argv(bmc, user) + ["chassis", "power", "cycle"], capture_output=True, text=True,
+                           timeout=timeout, env={**os.environ, "IPMI_PASSWORD": password})
+        if p.returncode != 0:
+            raise RuntimeError(f"ipmitool power cycle failed: {p.stderr.strip()[-200:]}")
+        return
+    with RedfishClient(bmc, secrets, timeout) as rf:
+        rf.reset("ForceRestart")

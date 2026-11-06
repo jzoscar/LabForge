@@ -159,6 +159,114 @@ def monitor(once: bool = typer.Option(True, "--once/--loop")) -> None:
         typer.echo(typer.style(f"{status:<9}", fg=STATUS_COLOR.get(status, "white")) + f" {addr}")
 
 
+sim_app = typer.Typer(help="Simulated device lab on localhost (no hardware needed).", no_args_is_help=True)
+app.add_typer(sim_app, name="sim")
+SIM_CONTROL = "http://127.0.0.1:9100"
+
+
+@sim_app.command("run")
+def sim_run(devices: int = typer.Option(3, help="number of simulated sensors"),
+            base_port: int = typer.Option(9100, help="control port; device N uses base+N*10+1 (http) and +2 (BMC)"),
+            bmc_credentials: str = typer.Option("admin:admin", envvar="LABFORGE_SIM_BMC_CREDENTIALS")) -> None:
+    """Run simulated ARM sensors with Redfish BMCs until interrupted (matches infra/test/sim-lab.yaml)."""
+    import time
+
+    from labforge.sim import Simulator, default_devices
+
+    sim = Simulator(default_devices(devices, base_port), base_port, bmc_credentials).start()
+    for d in sim.devices.values():
+        typer.echo(f"{d.spec.name:<15} device http://127.0.0.1:{d.spec.http_port}  bmc http://127.0.0.1:{d.spec.bmc_port}")
+    typer.echo(f"control         http://127.0.0.1:{base_port}/sim   (labforge sim fault <device> crash|hang|overheat|none)")
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        sim.stop()
+
+
+@sim_app.command("status")
+def sim_status(control: str = typer.Option(SIM_CONTROL)) -> None:
+    """Show simulated devices: power, firmware, injected fault."""
+    import httpx
+
+    for d in httpx.get(f"{control}/sim", timeout=5).json()["devices"]:
+        fault = typer.style(d["fault"], fg="red") if d["fault"] else typer.style("none", fg="green")
+        typer.echo(f"{d['name']:<15} power {d['power']:<4} firmware {d['firmware']:<8} {d['temperature']:>4.0f}C  fault {fault}")
+
+
+@sim_app.command("fault")
+def sim_fault(device: str, fault: str = typer.Argument(..., help="crash | hang | overheat | none"),
+              control: str = typer.Option(SIM_CONTROL)) -> None:
+    """Inject (or clear) a fault on a simulated device."""
+    import httpx
+
+    r = httpx.post(f"{control}/sim/devices/{device}/fault", json={"fault": fault}, timeout=5)
+    if r.status_code != 200:
+        typer.secho(r.json().get("error", r.text), fg="red", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"{device}: fault={r.json()['fault'] or 'none'}")
+
+
+rig_app = typer.Typer(help="Borrow devices from a rig pool (talks to a running LabForge server).", no_args_is_help=True)
+app.add_typer(rig_app, name="rig")
+ServerOpt = typer.Option("http://127.0.0.1:8000", "--server", envvar="LABFORGE_SERVER")
+TokenOpt = typer.Option(None, "--token", envvar="LABFORGE_API_TOKEN")
+
+
+def _rig_request(method: str, server: str, path: str, token: str | None, **kw):
+    import httpx
+
+    r = httpx.request(method, f"{server.rstrip('/')}/api/v1{path}", timeout=120,
+                      headers={"X-LabForge-Token": token} if token else {}, **kw)
+    if r.status_code >= 400:
+        detail = r.json().get("detail", r.text) if "json" in r.headers.get("content-type", "") else r.text
+        typer.secho(f"error {r.status_code}: {detail}", fg="red", err=True)
+        raise typer.Exit(2 if r.status_code == 409 else 1)
+    return r.json() if r.content else None
+
+
+@rig_app.command("list")
+def rig_list(server: str = ServerOpt) -> None:
+    """Show pools and the state of every device."""
+    for pool in _rig_request("GET", server, "/rigs", None):
+        typer.echo(f"pool {pool['pool']}: {pool['free']} ready")
+        for d in pool["devices"]:
+            holder = d["lease"]["holder"] if d["lease"] else ""
+            typer.echo(f"  {d['device']:<18} {d['status']:<9} {d['rig']:<12} {holder}")
+
+
+@rig_app.command("checkout")
+def rig_checkout(pool: str = typer.Option(..., "--pool"), holder: str = typer.Option(..., "--holder"),
+                 ttl: int = typer.Option(1800, "--ttl", help="lease length in seconds"),
+                 output: str = typer.Option("text", "--output", help="text | json | env"),
+                 server: str = ServerOpt, token: str | None = TokenOpt) -> None:
+    """Borrow a healthy device. Exit code 2 when none is available."""
+    import json
+
+    lease = _rig_request("POST", server, "/rigs/checkout", token,
+                         json={"pool": pool, "holder": holder, "ttl_seconds": ttl})
+    if output == "json":
+        typer.echo(json.dumps(lease, indent=2, default=str))
+    elif output == "env":
+        values = {"LABFORGE_LEASE_ID": lease["leaseId"], "LABFORGE_DEVICE": lease["device"],
+                  "LABFORGE_DEVICE_HOST": lease["host"], "LABFORGE_DEVICE_HTTP": lease["endpoints"].get("http", ""),
+                  "LABFORGE_DEVICE_BMC": lease["endpoints"].get("bmc", "")}
+        for k, v in values.items():
+            typer.echo(f"{k}={v}")
+    else:
+        typer.echo(f"lease {lease['leaseId']}: {lease['device']} ({lease['host']}) until {lease['expiresAt']}")
+        if lease["note"]:
+            typer.echo(f"  {lease['note']}")
+
+
+@rig_app.command("release")
+def rig_release(lease_id: int, result: str = typer.Option(..., "--result", help="passed | failed | infra-failed"),
+                server: str = ServerOpt, token: str | None = TokenOpt) -> None:
+    """Return a device; it is power-cycled back to a known-good state."""
+    lease = _rig_request("POST", server, f"/rigs/leases/{lease_id}/release", token, json={"result": result})
+    typer.echo(f"lease {lease_id} released ({result}): {lease['note']}")
+
+
 @app.command()
 def serve(host: str = "127.0.0.1", port: int = 8000, reload: bool = False) -> None:
     """Start the web UI + REST API (+ background monitoring)."""

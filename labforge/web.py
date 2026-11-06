@@ -49,7 +49,17 @@ def sparkline(values: list[float | None], width: int = 140, height: int = 30, vm
     )
 
 
+def until(dt: datetime | None) -> str:
+    if not dt:
+        return "—"
+    s = int((dt - utcnow()).total_seconds())
+    if s <= 0:
+        return "now"
+    return f"in {s // 60}m" if s < 3600 else f"in {s // 3600}h {s % 3600 // 60}m"
+
+
 templates.env.filters["ago"] = ago
+templates.env.filters["until"] = until
 templates.env.globals.update(STATUS_LABEL=STATUS_LABEL, KIND_LABEL=KIND_LABEL, TIER_LABEL=TIER_LABEL)
 
 

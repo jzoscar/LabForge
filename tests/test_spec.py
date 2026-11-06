@@ -10,7 +10,7 @@ HEADER = "apiVersion: labforge/v1\nkind: Environment\nmetadata: {name: t, tier: 
 
 def test_example_infra_is_valid():
     names = {d.metadata.name for d in load_path(ROOT / "infra")}
-    assert names == {"dev", "test-unit", "test-integration", "staging", "demo"}
+    assert names == {"dev", "test-unit", "test-integration", "sim-lab", "staging", "demo"}
     assert {d.metadata.name for d in load_path(ROOT / "examples" / "local")} == {"local"}
 
 
