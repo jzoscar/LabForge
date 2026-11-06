@@ -1,0 +1,106 @@
+# Test (integration environment): the whole chain end to end.
+# Sensors -> gateway service -> Windows desktop clients (x64 and ARM64), behind a load balancer.
+apiVersion: labforge/v1
+kind: Environment
+metadata:
+  name: test-integration
+  tier: test
+  description: End-to-end integration of sensors, gateway service and Windows clients
+  labels: { scope: integration, ci: nightly }
+spec:
+  networks:
+    - name: int-net
+      type: vlan
+      cidr: 10.21.0.0/16
+      subnets:
+        - { name: mgmt,     cidr: 10.21.0.0/24, gateway: 10.21.0.1, vlan: 210 }
+        - { name: devices,  cidr: 10.21.1.0/24, gateway: 10.21.1.1, vlan: 211 }
+        - { name: clients,  cidr: 10.21.2.0/24, gateway: 10.21.2.1, vlan: 212 }
+        - { name: services, cidr: 10.21.3.0/24, gateway: 10.21.3.1, vlan: 213 }
+
+  hosts:
+    - name: int-sensor-01
+      kind: baremetal
+      platform: { os: linux, arch: arm64 }
+      address: 10.21.1.11
+      subnet: int-net/devices
+      bmc: { type: redfish, address: 10.21.0.11, credentialsRef: int-bmc }
+      power: "on"
+      connection: { type: ssh, user: root, keyRef: int-ssh-key }
+      monitor:
+        agent: true
+        probes: [ { type: ping }, { type: http, port: 80, path: /version } ]
+      labels: { role: sensor }
+
+    - name: int-sensor-02
+      kind: baremetal
+      platform: { os: linux, arch: arm64 }
+      address: 10.21.1.12
+      subnet: int-net/devices
+      bmc: { type: redfish, address: 10.21.0.12, credentialsRef: int-bmc }
+      power: "on"
+      connection: { type: ssh, user: root, keyRef: int-ssh-key }
+      monitor:
+        agent: true
+        probes: [ { type: ping }, { type: http, port: 80, path: /version } ]
+      labels: { role: sensor }
+
+    - name: int-win-x64
+      kind: baremetal
+      platform: { os: windows, arch: amd64 }
+      address: 10.21.2.21
+      subnet: int-net/clients
+      bmc: { type: redfish, address: 10.21.0.21, credentialsRef: int-bmc }
+      connection: { type: winrm, user: Administrator, passwordRef: int-win-admin }
+      bootstrap:
+        - Set-Service -Name WinRM -StartupType Automatic
+      monitor:
+        agent: true
+        probes: [ { type: ping }, { type: tcp, port: 5985 }, { type: tcp, port: 3389 } ]
+      labels: { role: client }
+
+    - name: int-win-arm64
+      kind: baremetal
+      platform: { os: windows, arch: arm64 }
+      address: 10.21.2.22
+      subnet: int-net/clients
+      connection: { type: winrm, user: Administrator, passwordRef: int-win-admin }
+      monitor:
+        agent: true
+        probes: [ { type: ping }, { type: tcp, port: 5985 } ]
+      labels: { role: client }
+
+    - name: int-svc-01
+      kind: vm
+      platform: { os: linux, arch: amd64 }
+      address: 10.21.3.10
+      subnet: int-net/services
+      connection: { type: ssh, user: ops }
+      monitor:
+        agent: true
+        probes: [ { type: ping }, { type: http, port: 8080, path: /healthz } ]
+      labels: { role: service }
+
+  loadBalancers:
+    - name: int-gateway
+      network: int-net
+      vip: 10.21.3.100
+      driver: haproxy
+      host: int-svc-01
+      listeners: [ { port: 80, protocol: http, targetPort: 8080 } ]
+      targets: [ int-svc-01 ]
+      healthCheck: { protocol: http, port: 8080, path: /healthz }
+
+  containers:
+    - name: gateway
+      host: int-svc-01
+      image: registry.lab.local/sensor-gateway:nightly
+      ports: ["8080:8080"]
+      env: { SENSORS: "10.21.1.11,10.21.1.12" }
+      secretEnv: { DB_PASSWORD: int-db-password }
+    - name: gateway-db
+      host: int-svc-01
+      image: postgres:16
+      ports: ["5432:5432"]
+      env: { POSTGRES_DB: gateway }
+      secretEnv: { POSTGRES_PASSWORD: int-db-password }

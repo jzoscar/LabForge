@@ -32,6 +32,10 @@ class EnvView:
     description: str
     resources: list[ResourceView]
     mermaid: str
+    labels: dict[str, str]
+    kinds: dict[str, int]  # resource count per kind
+    arm: int  # hosts on ARM
+    windows: int  # Windows hosts
 
     def by_kind(self, kind: str) -> list[ResourceView]:
         return [r for r in self.resources if r.kind == kind]
@@ -91,8 +95,14 @@ def describe(docs: list[EnvironmentDoc]) -> list[EnvView]:
             summary, details = _summary(r)
             views.append(ResourceView(r.kind, r.name, r.address, summary, details,
                                       [d.split(".", 2)[2] for d in r.depends_on]))
-        out.append(EnvView(doc.metadata.name, doc.metadata.tier, doc.metadata.description, views,
-                           mermaid_graph(resources)))
+        hosts = doc.spec.hosts
+        out.append(EnvView(
+            doc.metadata.name, doc.metadata.tier, doc.metadata.description, views, mermaid_graph(resources),
+            labels=dict(doc.metadata.labels),
+            kinds={k: n for k in KIND_ORDER if (n := sum(1 for r in resources if r.kind == k))},
+            arm=sum(1 for h in hosts if h.platform.arch in ("arm64", "armv7")),
+            windows=sum(1 for h in hosts if h.platform.os == "windows"),
+        ))
     return out
 
 

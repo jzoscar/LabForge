@@ -21,7 +21,7 @@ templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
 STATUS_LABEL = {"up": "Up", "degraded": "Degraded", "down": "Down", "unknown": "Unknown"}
 KIND_LABEL = {"network": "Network/VPC", "loadbalancer": "Load balancer", "host": "Host", "container": "Container"}
-TIER_LABEL = {"dev": "Dev", "test": "Test", "rnd": "R&D", "staging": "Staging", "prod": "Prod"}
+TIER_LABEL = {"dev": "Dev", "test": "Test", "rnd": "R&D", "staging": "Staging", "demo": "Demo", "prod": "Prod"}
 
 
 def ago(dt: datetime | None) -> str:

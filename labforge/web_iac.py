@@ -45,20 +45,23 @@ def _diag_json(d: Diagnostic) -> dict:
 # --- pages ------------------------------------------------------------------
 
 
+TIER_ORDER = ["dev", "test", "rnd", "staging", "demo", "prod"]
+GROUP_LABEL = "scope"  # metadata label used to filter environments
+
+
 @router.get("", response_class=HTMLResponse)
-def workspace(request: Request, session: Session = Depends(get_session)):
-    return _render_workspace(request, session)
+def workspace(request: Request, tab: str = "all", env: str = "", label: str = "",
+              session: Session = Depends(get_session)):
+    return _render_workspace(request, session, tab=tab, env=env, label=label)
 
 
-def _render_workspace(request: Request, session: Session, import_results: list | None = None):
+def _render_workspace(request: Request, session: Session, *, tab: str = "all", env: str = "", label: str = "",
+                      import_results: list | None = None):
+    """Environments are shown by tier (tabs) and scope label (filter); files and the
+    workspace plan have their own tabs, so nothing is dumped onto one long page."""
     settings = request.app.state.settings
     ws = _ws(request)
     files = ws.files()
-
-    envs = []
-    for f in files:
-        docs, _ = parse_text(ws.read(f.path)[0], f.path)
-        envs += [(f.path, view) for view in describe(docs)]
 
     plan, errors = None, []
     if files:
@@ -66,13 +69,53 @@ def _render_workspace(request: Request, session: Session, import_results: list |
             _, plan = service.make_plan(session, ws.root)
         except LoadError as e:
             errors = [(d.file and _relative(ws, d.file), d) for d in e.diagnostics]
+    pending: dict[str, dict[str, int]] = {}
+    for ch in plan.changes if plan else []:
+        if ch.action != "noop":
+            counts = pending.setdefault(ch.env, {"create": 0, "update": 0, "delete": 0})
+            counts[ch.action] += 1
 
+    entries = []
+    for f in files:
+        docs, _ = parse_text(ws.read(f.path)[0], f.path)
+        entries += [{"file": f.path, "view": v, "problems": len(f.diagnostics), "pending": pending.get(v.name)}
+                    for v in describe(docs)]
+    entries.sort(key=lambda e: (TIER_ORDER.index(e["view"].tier) if e["view"].tier in TIER_ORDER else 99,
+                                e["view"].name))
+
+    tiers = [(t, sum(1 for e in entries if e["view"].tier == t)) for t in TIER_ORDER]
+    tiers = [(t, n) for t, n in tiers if n]
+    scopes = sorted({e["view"].labels[GROUP_LABEL] for e in entries if GROUP_LABEL in e["view"].labels})
+
+    shown = [e for e in entries if tab in ("all", e["view"].tier)]
+    if label:
+        shown = [e for e in shown if e["view"].labels.get(GROUP_LABEL) == label]
+    selected = next((e for e in entries if e["view"].name == env), None)
+
+    folders = _by_folder(files)
+
+    if import_results is not None:
+        tab = "files"
     return templates.TemplateResponse(request, "iac.html", {
-        "nav": "iac", "root": ws.root, "files": files, "envs": envs, "plan": plan, "errors": errors,
+        "nav": "iac", "root": ws.root, "tab": tab, "label": label, "selected": selected,
+        "tiers": tiers, "scopes": scopes, "group_label": GROUP_LABEL,
+        "entries": entries, "shown": shown, "files": files, "folders": folders,
+        "plan": plan, "errors": errors,
         "resource_total": sum(f.resources for f in files), "problem_total": sum(len(f.diagnostics) for f in files),
         "ui_apply": settings.ui_apply, "ui_edit": settings.ui_edit, "starters": STARTERS,
         "import_results": import_results,
     })
+
+
+def _by_folder(files: list) -> dict[str, list]:
+    folders: dict[str, list] = {}
+    for f in files:
+        folders.setdefault(f.path.rsplit("/", 1)[0] if "/" in f.path else "", []).append(f)
+    # Folders named after a tier follow the tier order (dev, test, staging, demo...).
+    def key(item: tuple[str, list]) -> tuple[int, str]:
+        top = item[0].split("/", 1)[0]
+        return (TIER_ORDER.index(top) if top in TIER_ORDER else len(TIER_ORDER), item[0])
+    return dict(sorted(folders.items(), key=key))
 
 
 def _relative(ws: Workspace, file: str) -> str:
@@ -91,7 +134,7 @@ def editor(request: Request, path: str):
         raise HTTPException(e.status, str(e)) from e
     settings = request.app.state.settings
     return templates.TemplateResponse(request, "editor.html", {
-        "nav": "iac", "path": path, "text": text, "digest": digest, "files": ws.files(),
+        "nav": "iac", "path": path, "text": text, "digest": digest, "folders": _by_folder(ws.files()),
         "ui_edit": settings.ui_edit, "ui_apply": settings.ui_apply,
     })
 

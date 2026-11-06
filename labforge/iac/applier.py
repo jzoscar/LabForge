@@ -30,10 +30,14 @@ class ApplyContext:
     workdir: Path = Path(".labforge")
     desired: dict[str, DesiredResource] = field(default_factory=dict)
     recorded: dict[str, dict] = field(default_factory=dict)  # address -> spec from state
+    env_dirs: dict[str, Path] = field(default_factory=dict)  # env -> directory of its IaC file
 
     @property
     def dry_run(self) -> bool:
         return self.runner.dry_run
+
+    def dir_for(self, env: str) -> Path:
+        return self.env_dirs.get(env, self.base_dir)
 
     def host(self, env: str, name: str) -> Host:
         addr = address(env, "host", name)

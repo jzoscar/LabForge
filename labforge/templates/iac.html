@@ -1,22 +1,133 @@
 {% extends "base.html" %}
 {% block title %}IaC workspace{% endblock %}
+{% macro q(t=none, l=none, e=none) -%}
+?tab={{ t if t is not none else tab }}{% set lv = l if l is not none else label %}{% if lv %}&label={{ lv }}{% endif %}{% if e %}&env={{ e }}{% endif %}
+{%- endmacro %}
 {% block content %}
 <div class="page-head">
   <h1>IaC workspace</h1>
-  <span class="mono muted">{{ root }}</span>
+  <span class="mono muted" title="{{ root }}">{{ root.name }}/</span>
   <div class="actions">
-    <a class="btn" href="/iac/schema">Field reference</a>
+    {% if ui_edit %}<a class="btn" href="?tab=files#new">New file</a><a class="btn" href="?tab=files#import">Import</a>{% endif %}
     <a class="btn" href="/iac/export">Export .zip</a>
+    <a class="btn" href="/iac/schema">Field reference</a>
   </div>
 </div>
 
 <section class="stats">
+  <div class="stat"><div class="n">{{ entries|length }}</div><div class="l">Environments</div></div>
   <div class="stat"><div class="n">{{ files|length }}</div><div class="l">Files</div></div>
-  <div class="stat"><div class="n">{{ envs|length }}</div><div class="l">Environments</div></div>
   <div class="stat"><div class="n">{{ resource_total }}</div><div class="l">Declared resources</div></div>
   <div class="stat {{ 's-down' if problem_total or errors else 's-up' }}"><div class="n">{{ problem_total if problem_total else errors|length }}</div><div class="l">Problems</div></div>
 </section>
 
+<nav class="tabbar">
+  <a href="{{ q('all', '') }}" class="{{ 'on' if tab == 'all' }}">All <span class="cnt">{{ entries|length }}</span></a>
+  {% for t, n in tiers %}<a href="{{ q(t, '') }}" class="{{ 'on' if tab == t }}">{{ TIER_LABEL.get(t, t) }} <span class="cnt">{{ n }}</span></a>{% endfor %}
+  <span class="sep"></span>
+  <a href="?tab=files" class="{{ 'on' if tab == 'files' }}">Files <span class="cnt">{{ files|length }}</span></a>
+  <a href="?tab=plan" class="{{ 'on' if tab == 'plan' }}">Plan &amp; apply{% if plan and plan.has_changes %} <span class="cnt">{{ plan.counts()['create'] + plan.counts()['update'] + plan.counts()['delete'] }}</span>{% endif %}</a>
+</nav>
+
+{% if errors %}
+<section class="card">
+  <h2 class="err">Problems</h2>
+  <ul class="errors">
+    {% for rel, d in errors %}
+    <li class="mono"><a href="/iac/edit?path={{ rel }}{{ '#L' ~ d.line if d.line }}">{{ rel }}{{ ':' ~ d.line if d.line }}</a> {{ d.message }}</li>
+    {% endfor %}
+  </ul>
+  <p class="sub">Plan and apply are available once every file is valid.</p>
+</section>
+{% endif %}
+
+{# ------------------------------------------------------------ environments #}
+{% if tab not in ('files', 'plan') %}
+
+{% if scopes %}
+<div class="filters chips">
+  <span class="sub">{{ group_label|capitalize }}:</span>
+  <a href="{{ q(l='') }}" class="chip-link {{ 'on' if not label }}">any</a>
+  {% for s in scopes %}<a href="{{ q(l=s) }}" class="chip-link {{ 'on' if label == s }}">{{ s }}</a>{% endfor %}
+</div>
+{% endif %}
+
+{% if selected %}
+{% set v = selected.view %}
+<section class="card detail" id="detail">
+  <div class="card-head">
+    <h2>{{ v.name }} <span class="chip tier-{{ v.tier }}">{{ TIER_LABEL.get(v.tier, v.tier) }}</span></h2>
+    <div class="actions">
+      <a class="btn" href="/iac/edit?path={{ selected.file }}">Edit {{ selected.file }}</a>
+      <a class="btn" href="{{ q() }}">Close</a>
+    </div>
+  </div>
+  {% if v.description %}<p class="sub">{{ v.description }}</p>{% endif %}
+  <div class="grid2 tight">
+    <table>
+      <thead><tr><th>Resource</th><th>Declaration</th><th>Depends on</th></tr></thead>
+      <tbody>
+      {% for r in v.resources %}
+      <tr>
+        <td><span class="kind k-{{ r.kind }}">{{ KIND_LABEL.get(r.kind, r.kind) }}</span><div class="mono">{{ r.name }}</div></td>
+        <td>{{ r.summary }}{% if r.details %}<div class="sub">{{ r.details|join(' · ') }}</div>{% endif %}</td>
+        <td class="sub">{{ r.depends_on|join(', ') or '—' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3" class="muted">No resources declared yet</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if v.resources %}<div class="graph"><pre class="mermaid">{{ v.mermaid }}</pre></div>{% endif %}
+  </div>
+</section>
+{% endif %}
+
+{% set nouns = {'network': 'network', 'loadbalancer': 'LB', 'host': 'host', 'container': 'container'} %}
+{% macro env_card(e) %}
+{% set v = e.view %}
+<a class="env-card {{ 'on' if selected and selected.view.name == v.name }}" href="{{ q(e=v.name) }}#detail">
+  <div class="env-top">
+    <span class="env-name">{{ v.name }}</span>
+    {% if v.labels.get(group_label) %}<span class="chip">{{ v.labels[group_label] }}</span>{% endif %}
+  </div>
+  <p class="sub">{{ v.description or 'No description' }}</p>
+  <div class="env-scale">
+    {% for k, n in v.kinds.items() %}<span><b>{{ n }}</b> {{ nouns[k] }}{{ 's' if n != 1 }}</span>{% endfor %}
+  </div>
+  <div class="env-platforms">
+    {% if v.arm %}<span class="chip arch-arm64">{{ v.arm }} ARM</span>{% endif %}
+    {% if v.windows %}<span class="chip os-windows">{{ v.windows }} Windows</span>{% endif %}
+    {% for k, val in v.labels.items() if k != group_label %}<span class="chip">{{ k }}: {{ val }}</span>{% endfor %}
+  </div>
+  <div class="env-foot">
+    <span class="mono sub">{{ e.file }}</span>
+    {% if e.problems %}<span class="badge s-down">{{ e.problems }} problem{{ 's' if e.problems != 1 }}</span>
+    {% elif e.pending %}{% set p = e.pending %}<span class="badge s-degraded nowrap" title="changes waiting to be applied">{% if p['create'] %}+{{ p['create'] }} {% endif %}{% if p['update'] %}~{{ p['update'] }} {% endif %}{% if p['delete'] %}-{{ p['delete'] }} {% endif %}to apply</span>
+    {% elif plan %}<span class="badge s-up">in sync</span>
+    {% endif %}
+  </div>
+</a>
+{% endmacro %}
+
+{% if not shown %}
+<section class="card empty"><p class="muted">No environments match. {% if ui_edit %}<a href="?tab=files#new">Create one</a>.{% endif %}</p></section>
+{% elif tab == 'all' %}
+  {% for t, _ in tiers %}
+  {% set group = shown|selectattr('view.tier', 'equalto', t)|list %}
+  {% if group %}
+  <h2 class="tier-head"><span class="chip tier-{{ t }}">{{ TIER_LABEL.get(t, t) }}</span> <span class="sub">{{ group|length }} environment{{ 's' if group|length != 1 }}</span></h2>
+  <div class="env-grid">{% for e in group %}{{ env_card(e) }}{% endfor %}</div>
+  {% endif %}
+  {% endfor %}
+{% else %}
+  <div class="env-grid">{% for e in shown %}{{ env_card(e) }}{% endfor %}</div>
+{% endif %}
+
+{% endif %}
+
+{# ------------------------------------------------------------------- files #}
+{% if tab == 'files' %}
 {% if import_results %}
 <section class="card">
   <h2>Import results</h2>
@@ -35,39 +146,42 @@
 </section>
 {% endif %}
 
-<div class="grid2">
+<div class="files-layout">
   <section class="card">
     <h2>Files</h2>
     {% if files %}
     <table>
       <thead><tr><th>File</th><th>Environments</th><th>Resources</th><th>Status</th><th></th></tr></thead>
+      {% for folder, group in folders.items() %}
       <tbody>
-      {% for f in files %}
-      <tr>
-        <td><a class="mono" href="/iac/edit?path={{ f.path }}">{{ f.path }}</a><div class="sub">{{ (f.size / 1024)|round(1) }} kB · {{ f.modified|ago }}</div></td>
-        <td>{% for e in f.envs %}<span class="chip">{{ e }}</span> {% endfor %}</td>
-        <td>{{ f.resources }}</td>
-        <td>{% if f.diagnostics %}<span class="badge s-down">{{ f.diagnostics|length }} problem{{ 's' if f.diagnostics|length != 1 }}</span>{% else %}<span class="badge s-up">valid</span>{% endif %}</td>
-        <td class="nowrap"><a href="/iac/edit?path={{ f.path }}">{{ 'Edit' if ui_edit else 'View' }}</a> · <a href="/iac/download?path={{ f.path }}">Download</a></td>
-      </tr>
-      {% endfor %}
+        <tr class="folder"><td colspan="5" class="mono">{{ folder or '(root)' }}/</td></tr>
+        {% for f in group %}
+        <tr>
+          <td><a class="mono" href="/iac/edit?path={{ f.path }}">{{ f.path.rsplit('/', 1)[-1] }}</a><div class="sub">{{ (f.size / 1024)|round(1) }} kB · {{ f.modified|ago }}</div></td>
+          <td>{% for e in f.envs %}<span class="chip">{{ e }}</span> {% endfor %}</td>
+          <td>{{ f.resources }}</td>
+          <td>{% if f.diagnostics %}<span class="badge s-down">{{ f.diagnostics|length }} problem{{ 's' if f.diagnostics|length != 1 }}</span>{% else %}<span class="badge s-up">valid</span>{% endif %}</td>
+          <td class="nowrap"><a href="/iac/edit?path={{ f.path }}">{{ 'Edit' if ui_edit else 'View' }}</a> · <a href="/iac/download?path={{ f.path }}">Download</a></td>
+        </tr>
+        {% endfor %}
       </tbody>
+      {% endfor %}
     </table>
     {% else %}<p class="muted">The workspace is empty. Create a file or import one.</p>{% endif %}
   </section>
 
   <section class="card">
     {% if ui_edit %}
-    <h2>New file</h2>
+    <h2 id="new">New file</h2>
     <form method="post" action="/iac/new" class="stack">
-      <label>File name <input name="name" placeholder="device-pool.yaml" required pattern="[A-Za-z0-9_][A-Za-z0-9_./-]*"></label>
+      <label>File name <input name="name" placeholder="test/test-perf.yaml" required pattern="[A-Za-z0-9_][A-Za-z0-9_./-]*"></label>
       <label>Environment name <input name="env" placeholder="defaults to the file name" pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?"></label>
       <label>Start from
-        <select name="starter">{% for k, label in starters.items() %}<option value="{{ k }}">{{ label }}</option>{% endfor %}</select>
+        <select name="starter">{% for k, l in starters.items() %}<option value="{{ k }}">{{ l }}</option>{% endfor %}</select>
       </label>
       <button>Create and edit</button>
     </form>
-    <h2 class="gap">Import</h2>
+    <h2 class="gap" id="import">Import</h2>
     <form method="post" action="/iac/import" enctype="multipart/form-data" class="stack">
       <input type="file" name="files" multiple accept=".yaml,.yml,.zip" required>
       <label class="inline"><input type="checkbox" name="overwrite" value="true"> Overwrite existing files</label>
@@ -80,46 +194,10 @@
     {% endif %}
   </section>
 </div>
-
-{% if errors %}
-<section class="card">
-  <h2 class="err">Problems</h2>
-  <ul class="errors">
-    {% for rel, d in errors %}
-    <li class="mono"><a href="/iac/edit?path={{ rel }}{{ '#L' ~ d.line if d.line }}">{{ rel }}{{ ':' ~ d.line if d.line }}</a> {{ d.message }}</li>
-    {% endfor %}
-  </ul>
-  <p class="sub">Plan and apply are available once every file is valid.</p>
-</section>
 {% endif %}
 
-{% for file, env in envs %}
-<section class="card">
-  <div class="card-head">
-    <h2>{{ env.name }} <span class="chip tier-{{ env.tier }}">{{ TIER_LABEL.get(env.tier, env.tier) }}</span></h2>
-    <a class="mono sub" href="/iac/edit?path={{ file }}">{{ file }}</a>
-  </div>
-  {% if env.description %}<p class="sub">{{ env.description }}</p>{% endif %}
-  <div class="grid2 tight">
-    <table>
-      <thead><tr><th>Resource</th><th>Declaration</th><th>Depends on</th></tr></thead>
-      <tbody>
-      {% for r in env.resources %}
-      <tr>
-        <td><span class="kind k-{{ r.kind }}">{{ KIND_LABEL.get(r.kind, r.kind) }}</span><div class="mono">{{ r.name }}</div></td>
-        <td>{{ r.summary }}{% if r.details %}<div class="sub">{{ r.details|join(' · ') }}</div>{% endif %}</td>
-        <td class="sub">{{ r.depends_on|join(', ') or '—' }}</td>
-      </tr>
-      {% else %}
-      <tr><td colspan="3" class="muted">No resources declared yet</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% if env.resources %}<div class="graph"><pre class="mermaid">{{ env.mermaid }}</pre></div>{% endif %}
-  </div>
-</section>
-{% endfor %}
-
+{# -------------------------------------------------------------------- plan #}
+{% if tab == 'plan' %}
 {% if plan %}
 {% set c = plan.counts() %}
 <section class="card">
@@ -133,7 +211,7 @@
     <label class="inline"><input type="checkbox" name="allow_prod" value="true"> Allow changes to production</label>
     <button {{ 'disabled' if not plan.has_changes }}>Apply</button>
   </form>
-  {% if not ui_apply %}<p class="sub">Real applies from the web UI are disabled (set <code>LABFORGE_UI_APPLY=1</code> to enable). To apply for real, use the CLI: <code>labforge apply {{ root }}</code></p>{% endif %}
+  {% if not ui_apply %}<p class="sub">Real applies from the web UI are disabled (set <code>LABFORGE_UI_APPLY=1</code> to enable). To apply for real, use the CLI: <code>labforge apply {{ root }}</code>. A single environment can be applied from its file in the editor.</p>{% endif %}
   <table>
     <thead><tr><th>Action</th><th>Resource</th><th>Tier</th><th>Changed fields</th></tr></thead>
     <tbody>
@@ -148,11 +226,16 @@
     </tbody>
   </table>
 </section>
+{% elif not errors %}
+<section class="card empty"><p class="muted">Nothing to plan yet.</p></section>
+{% endif %}
 {% endif %}
 
+{% if selected %}
 <script type="module">
   import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs";
   const dark = matchMedia("(prefers-color-scheme: dark)").matches;
   mermaid.initialize({ startOnLoad: true, theme: dark ? "dark" : "default", securityLevel: "strict" });
 </script>
+{% endif %}
 {% endblock %}

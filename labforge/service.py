@@ -85,6 +85,7 @@ def execute_run(
                     workdir=settings.data_dir,
                     desired=plan.desired,
                     recorded=states,
+                    env_dirs={d.metadata.name: Path(d._source).parent for d in docs if d._source},
                 )
                 log(f"plan: {plan.counts()} for env(s) {', '.join(plan.envs) or '-'}" + (" [dry-run]" if dry_run else ""))
                 done = apply_plan(plan, session, ctx, allow_prod=allow_prod)

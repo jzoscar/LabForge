@@ -1,0 +1,64 @@
+# Demo: a simplified production for customer demos and trade shows.
+# One cloud host runs every service; the VPC and the public load balancer come from Terraform
+# modules; a single sensor ships with the demo kit.
+apiVersion: labforge/v1
+kind: Environment
+metadata:
+  name: demo
+  tier: demo
+  description: Simplified production for customer demos - all services on one cloud host
+  labels: { scope: showcase, audience: customers }
+spec:
+  networks:
+    - name: demo-vpc
+      type: vpc
+      cidr: 172.20.0.0/16
+      driver: terraform
+      terraform:
+        module: ../terraform/vpc       # relative to this file
+        vars: { region: ca-central-1 }
+      subnets:
+        - { name: app, cidr: 172.20.1.0/24, gateway: 172.20.1.1 }
+
+  hosts:
+    - name: demo-app-01
+      kind: cloud
+      platform: { os: linux, arch: arm64 }
+      address: 172.20.1.10
+      subnet: demo-vpc/app
+      connection: { type: ssh, user: ubuntu }
+      monitor:
+        agent: true
+        probes: [ { type: ping }, { type: http, port: 8080, path: /healthz } ]
+      labels: { role: all-in-one }
+
+    - name: demo-kit-sensor
+      kind: baremetal
+      platform: { os: linux, arch: arm64 }
+      address: 192.168.50.11
+      connection: { type: ssh, user: root, keyRef: demo-ssh-key }
+      monitor:
+        probes: [ { type: ping }, { type: http, port: 80, path: /version } ]
+      labels: { role: sensor, kit: trade-show }
+
+  loadBalancers:
+    - name: demo-public
+      network: demo-vpc
+      driver: terraform
+      terraform: { module: ../terraform/lb }
+      listeners: [ { port: 443, protocol: https, targetPort: 8080 } ]
+      targets: [ demo-app-01 ]
+      healthCheck: { protocol: http, port: 8080, path: /healthz }
+
+  containers:
+    - name: gateway
+      host: demo-app-01
+      image: registry.lab.local/sensor-gateway:stable
+      ports: ["8080:8080"]
+      env: { DEMO_MODE: "true" }
+      secretEnv: { DB_PASSWORD: demo-db-password }
+    - name: gateway-db
+      host: demo-app-01
+      image: postgres:16
+      env: { POSTGRES_DB: gateway }
+      secretEnv: { POSTGRES_PASSWORD: demo-db-password }

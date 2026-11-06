@@ -1,0 +1,70 @@
+# Test (single environment): a device rig for module-level tests in CI.
+# Three ARM sensors on their own VLAN with out-of-band power control, driven by one rig controller.
+apiVersion: labforge/v1
+kind: Environment
+metadata:
+  name: test-unit
+  tier: test
+  description: Device rig for module tests of the sensor firmware
+  labels: { scope: single, module: sensor-firmware, ci: rig-sensor-a }
+spec:
+  networks:
+    - name: rig-net
+      type: vlan
+      cidr: 10.20.0.0/16
+      subnets:
+        - { name: mgmt,    cidr: 10.20.0.0/24, gateway: 10.20.0.1, vlan: 200 }   # BMC / out-of-band
+        - { name: devices, cidr: 10.20.1.0/24, gateway: 10.20.1.1, vlan: 201 }
+
+  hosts:
+    - name: rig-sensor-01
+      kind: baremetal
+      platform: { os: linux, arch: arm64 }
+      address: 10.20.1.11
+      subnet: rig-net/devices
+      bmc: { type: redfish, address: 10.20.0.11, credentialsRef: rig-bmc }
+      power: "on"
+      connection: { type: ssh, user: root, keyRef: rig-ssh-key }
+      monitor:
+        agent: true
+        probes: [ { type: ping }, { type: http, port: 80, path: /version } ]
+      labels: { role: sensor, pool: sensor-a }
+
+    - name: rig-sensor-02
+      kind: baremetal
+      platform: { os: linux, arch: arm64 }
+      address: 10.20.1.12
+      subnet: rig-net/devices
+      bmc: { type: redfish, address: 10.20.0.12, credentialsRef: rig-bmc }
+      power: "on"
+      connection: { type: ssh, user: root, keyRef: rig-ssh-key }
+      monitor:
+        agent: true
+        probes: [ { type: ping }, { type: http, port: 80, path: /version } ]
+      labels: { role: sensor, pool: sensor-a }
+
+    - name: rig-sensor-03
+      kind: baremetal
+      platform: { os: linux, arch: arm64 }
+      address: 10.20.1.13
+      subnet: rig-net/devices
+      bmc: { type: ipmi, address: 10.20.0.13, credentialsRef: rig-bmc }
+      power: "on"
+      connection: { type: ssh, user: root, keyRef: rig-ssh-key }
+      monitor:
+        agent: true
+        probes: [ { type: ping }, { type: http, port: 80, path: /version } ]
+      labels: { role: sensor, pool: sensor-a }
+
+    - name: rig-controller
+      kind: vm
+      platform: { os: linux, arch: amd64 }
+      address: 10.20.1.5
+      subnet: rig-net/devices
+      connection: { type: ssh, user: ci }
+      bootstrap:
+        - sudo systemctl enable --now actions-runner
+      monitor:
+        agent: true
+        probes: [ { type: ping }, { type: tcp, port: 22 } ]
+      labels: { role: ci-runner, runner-labels: "self-hosted,linux,rig-sensor-a" }

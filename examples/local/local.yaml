@@ -1,11 +1,11 @@
 # Local demo: apply without any real hardware and still see real monitoring data.
 #   LABFORGE_IAC_PATH=examples/local labforge apply -y
 #   labforge serve
-#   labforge agent --env demo --name this-mac --once
+#   labforge agent --env local --name this-mac --once
 apiVersion: labforge/v1
 kind: Environment
 metadata:
-  name: demo
+  name: local
   tier: dev
 spec:
   networks:

@@ -78,13 +78,24 @@ labforge serve                    # open http://127.0.0.1:8000
 In a second terminal, let this machine report as a piece of "test hardware":
 
 ```bash
-labforge agent --env demo --name this-mac
+labforge agent --env local --name this-mac
 ```
 
 ## Managing your lab
 
-`infra/` holds starter templates for real environments (`dev.yaml` development, `rnd.yaml` R&D,
-`staging.yaml` pre-production). After filling in your addresses, BMCs and accounts:
+`infra/` declares a complete set of R&D environments, one folder per tier. Each environment's size
+matches its purpose, and its `metadata.labels.scope` says what it is for (the web UI groups and filters
+by tier and scope):
+
+| Environment | File | Tier | Scope | What it is |
+|---|---|---|---|---|
+| `dev` | [infra/dev/dev.yaml](infra/dev/dev.yaml) | dev | module | One module on a developer's bench: a single ARM sensor board and a small server running the gateway service |
+| `test-unit` | [infra/test/test-unit.yaml](infra/test/test-unit.yaml) | test | single | Device rig for module tests in CI: three ARM sensors with BMC power control and a rig controller (self-hosted runner) |
+| `test-integration` | [infra/test/test-integration.yaml](infra/test/test-integration.yaml) | test | integration | The whole chain end to end: sensors, gateway + database behind HAProxy, Windows clients on x64 and ARM64 |
+| `staging` | [infra/staging/staging.yaml](infra/staging/staging.yaml) | staging | pre-production | Mirrors production at smaller scale: VLAN per role, two gateway nodes behind an HAProxy edge, dedicated database host, sensor pool, Windows clients |
+| `demo` | [infra/demo/demo.yaml](infra/demo/demo.yaml) | demo | showcase | A simplified production for customer demos: one cloud host runs every service; VPC and public load balancer come from Terraform modules; one sensor ships with the demo kit |
+
+Addresses, hosts and images are placeholders. After filling in your own addresses, BMCs and accounts:
 
 ```bash
 labforge validate infra           # schema + cross-reference checks (subnets inside the CIDR, LB targets exist, ...)
@@ -92,15 +103,17 @@ labforge plan infra               # show the diff only
 labforge apply infra --dry-run    # print every ssh / ipmitool / docker / terraform command that would run
 labforge apply infra              # apply for real (asks for confirmation)
 labforge state                    # list every resource and its health
-labforge destroy --env rnd        # tear down one environment (physical machines are deregistered, never wiped)
+labforge destroy --env demo       # tear down one environment (physical machines are deregistered, never wiped)
 ```
 
 ### IaC workspace in the browser
 
 The **IaC** page manages the folder at `LABFORGE_IAC_PATH` as a workspace:
 
-- **Browse and inspect**: every file with its environments, resource count and validation status; each
-  environment parsed into a resource table (what is declared, what it depends on) and a dependency graph
+- **Browse by tier and scope**: environments appear as cards in tabs (Dev / Test / Staging / Demo),
+  filterable by scope; each card shows its size (networks, hosts, LBs, containers), ARM and Windows
+  counts, labels and pending changes. Opening a card shows its resource table (what is declared, what it
+  depends on) and a dependency graph. Files and the workspace plan have their own tabs
 - **Edit online**: a YAML editor that validates as you type. Problems are marked on the exact line
   (schema errors, unknown fields, broken cross-references, duplicate environments across files), next to
   a live outline of the parsed structure and a **plan preview computed from the unsaved text**
@@ -109,7 +122,7 @@ The **IaC** page manages the folder at `LABFORGE_IAC_PATH` as a workspace:
 - **Create, import, export**: new files from starters (blank, device rig pool, build farm); import
   `.yaml` / `.yml` files or a `.zip` of a folder (each file is validated on import); export the
   workspace as a `.zip` or download a single file
-- **Run**: dry-run apply a single file or the whole workspace and follow the run log; real applies from
+- **Run**: dry-run apply a single environment file or the whole workspace and follow the run log; real applies from
   the browser need `LABFORGE_UI_APPLY=1`
 - **Field reference** at `/iac/schema`, generated from the same schema used for validation, plus
   `/iac/schema.json` for completion in VS Code or any editor using yaml-language-server
@@ -147,7 +160,7 @@ YAML files can also reference ordinary environment variables with `${VAR}` / `${
 ```yaml
 apiVersion: labforge/v1
 kind: Environment
-metadata: { name: dev, tier: dev }        # tier: dev | test | rnd | staging | prod
+metadata: { name: dev, tier: dev }        # tier: dev | test | rnd | staging | demo | prod
 spec:
   networks:
     - name: lab-vpc
@@ -186,7 +199,7 @@ spec:
       secretEnv: { POSTGRES_PASSWORD: test-db-password }
 ```
 
-Unknown fields are rejected, so typos never get silently ignored. See [infra/dev.yaml](infra/dev.yaml)
+Unknown fields are rejected, so typos never get silently ignored. See [infra/staging/staging.yaml](infra/staging/staging.yaml)
 for a full example.
 
 ## Deploying the agent
@@ -309,7 +322,7 @@ QEMU proves the ARM binary runs; it does not prove the product works on the devi
   - **WhatsApp**: Meta WhatsApp Cloud API or Twilio, for after-hours on-call
   - **SMS**: Twilio as the last-resort fallback (iMessage has no public sending API, so SMS covers phones)
   - **PagerDuty / Opsgenie**: on-call rotations and escalation; plus email and generic webhooks
-- [ ] Routing rules by environment tier (dev / test / rnd / staging / prod) and severity, e.g. build machine disk full → Slack channel; device pool availability below threshold → on-call engineer via WhatsApp
+- [ ] Routing rules by environment tier (dev / test / staging / demo / prod) and severity, e.g. build machine disk full → Slack channel; device pool availability below threshold → on-call engineer via WhatsApp
 - [ ] Deduplication, grouping, silence windows and recovery notifications to prevent alert storms
 - [ ] Prometheus metrics at `/metrics` with Grafana dashboards; historical trends and availability reports
 
@@ -356,7 +369,7 @@ pytest
 ✅ The browser shows `this-mac` up and `offline-board` down.
 
 **Step 3: Inventory your devices and write the IaC.** Start with the development environment only, in
-`infra/dev.yaml`:
+`infra/dev/dev.yaml`:
 
 - `networks`: the lab address ranges and subnets (management / ARM / Windows / services)
 - `hosts`: one entry per machine, with `platform.os` / `platform.arch`, `address`, a `bmc` block where
@@ -364,7 +377,7 @@ pytest
 - Remove what you do not need yet (load balancers, containers) and add it back later
 
 ```bash
-labforge validate infra/dev.yaml
+labforge validate infra/dev/dev.yaml
 ```
 
 ✅ Prints `✓ dev [dev]: ...` with no errors.
@@ -381,8 +394,8 @@ export LABFORGE_SECRET_WIN_ADMIN='<windows-admin-password>'
 **Step 5: Rehearse**
 
 ```bash
-labforge plan infra/dev.yaml
-labforge apply infra/dev.yaml --dry-run
+labforge plan infra/dev/dev.yaml
+labforge apply infra/dev/dev.yaml --dry-run
 ```
 
 ✅ Every ssh / ipmitool / winrm / docker command listed is what you expect.
@@ -408,7 +421,7 @@ Or as a container: `docker build -t labforge . && docker run -d -p 8000:8000 -v 
 **Step 8: Apply for real**
 
 ```bash
-labforge apply infra/dev.yaml
+labforge apply infra/dev/dev.yaml
 ```
 
 ✅ The run shows success, and `labforge state` lists every resource.
@@ -422,4 +435,4 @@ labforge apply infra/dev.yaml
 | Agent shows no reports / lost | Check the `--server` address, the token, and the firewall on port 8000 |
 | Ping fails but the service works | The device blocks ICMP; switch `monitor.probes` to a `tcp` probe |
 
-**Step 10: Expand** to `infra/rnd.yaml` and `infra/staging.yaml`, then move on to M2.
+**Step 10: Expand** to the test environments in `infra/test/`, then `infra/staging/` and `infra/demo/`, and move on to M2.

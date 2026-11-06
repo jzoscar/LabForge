@@ -68,16 +68,16 @@ def test_sweep_local_demo(engine, settings):
     run_id = service.create_run(engine, "test", dry_run=False)
     assert service.execute_run(engine, settings, run_id, ROOT / "examples" / "local", dry_run=False).status == "success"
     with Session(engine) as s:
-        service.ingest_agent_report(s, {"env": "demo", "name": "this-mac", "os": "darwin", "arch": "arm64",
+        service.ingest_agent_report(s, {"env": "local", "name": "this-mac", "os": "darwin", "arch": "arm64",
                                         "cpu_percent": 5, "mem_percent": 40, "disk_percent": 50})
 
     statuses = asyncio.run(Monitor(engine, settings).sweep())
     # nothing listens on tcp:1 -> down; this-mac has a fresh agent report but no server on :8000 -> degraded
-    assert statuses["demo.host.offline-board"] == "down"
-    assert statuses["demo.host.this-mac"] in {"up", "degraded"}
+    assert statuses["local.host.offline-board"] == "down"
+    assert statuses["local.host.this-mac"] in {"up", "degraded"}
 
     with Session(engine) as s:
-        checks = {c.probe for c in s.exec(select(CheckResult).where(CheckResult.address == "demo.host.this-mac"))}
+        checks = {c.probe for c in s.exec(select(CheckResult).where(CheckResult.address == "local.host.this-mac"))}
         assert {"agent", "drift", "thresholds", "http:8000/api/v1/health"} <= checks
-        assert s.exec(select(Event).where(Event.address == "demo.host.offline-board")).first().new_status == "down"
-        assert s.exec(select(ResourceState).where(ResourceState.address == "demo.host.offline-board")).one().status == "down"
+        assert s.exec(select(Event).where(Event.address == "local.host.offline-board")).first().new_status == "down"
+        assert s.exec(select(ResourceState).where(ResourceState.address == "local.host.offline-board")).one().status == "down"

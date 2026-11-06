@@ -16,7 +16,7 @@
     <form method="post" action="/iac/apply" class="inline-form needs-saved">
       <input type="hidden" name="path" value="{{ path }}">
       <input type="hidden" name="dry_run" value="true">
-      <button class="secondary" title="Plan and print every command for this file's environments, without changing anything">Dry-run apply</button>
+      <button class="secondary" aria-label="Dry-run apply" title="Plan and print every command for this file's environments, without changing anything">Dry-run apply</button>
     </form>
     {% if ui_apply %}
     <form method="post" action="/iac/apply" class="inline-form needs-saved" onsubmit="return confirm('Apply {{ path }} for real?')">
@@ -36,13 +36,16 @@
 
 <div class="editor-layout">
   <aside class="card filelist">
-    <h2><a href="/iac">Workspace</a></h2>
+    <h2><a href="/iac">← Workspace</a></h2>
+    {% for folder, group in folders.items() %}
+    <div class="folder">{{ folder or '(root)' }}</div>
     <ul>
-      {% for f in files %}
-      <li class="{{ 'on' if f.path == path }}"><a class="mono" href="/iac/edit?path={{ f.path }}">{{ f.path }}</a>
+      {% for f in group %}
+      <li class="{{ 'on' if f.path == path }}"><a class="mono" href="/iac/edit?path={{ f.path }}">{{ f.path.rsplit('/', 1)[-1] }}</a>
         {% if f.diagnostics %}<span class="dot err" title="{{ f.diagnostics|length }} problem(s)">●</span>{% endif %}</li>
       {% endfor %}
     </ul>
+    {% endfor %}
     <p class="sub"><a href="/iac/schema" target="_blank">Field reference ↗</a></p>
   </aside>
 

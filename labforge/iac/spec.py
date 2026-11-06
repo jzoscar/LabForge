@@ -1,6 +1,6 @@
 """Declarative IaC schema (YAML, camelCase keys).
 
-One document = one environment (dev / test / rnd / staging / prod) containing
+One document = one environment (dev / test / rnd / staging / demo / prod) containing
 networks (VPC/VLAN/physical), load balancers, hosts (bare-metal boards, VMs,
 servers - Linux or Windows, ARM or x86) and containers.
 """
@@ -10,11 +10,11 @@ from __future__ import annotations
 import ipaddress
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from pydantic.alias_generators import to_camel
 
 NAME = r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
-Tier = Literal["dev", "test", "rnd", "staging", "prod"]
+Tier = Literal["dev", "test", "rnd", "staging", "demo", "prod"]
 
 
 class Model(BaseModel):
@@ -22,7 +22,7 @@ class Model(BaseModel):
 
 
 class TerraformRef(Model):
-    module: str  # path to a terraform module, relative to the IaC source directory
+    module: str  # path to a terraform module, relative to the IaC file that declares it
     vars: dict[str, Any] = {}
 
 
@@ -229,6 +229,8 @@ class EnvironmentDoc(Model):
     kind: Literal["Environment"]
     metadata: Metadata
     spec: EnvironmentSpec = EnvironmentSpec()
+    # File the document was loaded from; relative paths (terraform modules) resolve against it.
+    _source: str | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def _references(self) -> EnvironmentDoc:

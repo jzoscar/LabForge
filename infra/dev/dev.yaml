@@ -1,0 +1,49 @@
+# Development: one module on a developer's bench.
+# A single ARM sensor board plus a small Linux server running the gateway service the module talks to.
+# Secrets never live here: each xxxRef names the environment variable LABFORGE_SECRET_<NAME>.
+apiVersion: labforge/v1
+kind: Environment
+metadata:
+  name: dev
+  tier: dev
+  description: Sensor firmware module on a single bench board
+  labels: { scope: module, module: sensor-firmware, owner: firmware-team }
+spec:
+  networks:
+    - name: dev-net
+      type: physical
+      cidr: 10.10.0.0/24
+      subnets:
+        - { name: bench, cidr: 10.10.0.0/24, gateway: 10.10.0.1 }
+
+  hosts:
+    - name: dev-sensor-01
+      kind: baremetal
+      platform: { os: linux, arch: arm64 }
+      address: 10.10.0.11
+      subnet: dev-net/bench
+      connection: { type: ssh, user: dev, keyRef: dev-ssh-key }
+      bootstrap:
+        - sudo mkdir -p /opt/sensor && sudo chown dev /opt/sensor
+      monitor:
+        agent: true
+        probes: [ { type: ping }, { type: tcp, port: 22 }, { type: http, port: 80, path: /version } ]
+      labels: { role: sensor, board: arm64-devkit }
+
+    - name: dev-server-01
+      kind: vm
+      platform: { os: linux, arch: amd64 }
+      address: 10.10.0.20
+      subnet: dev-net/bench
+      connection: { type: ssh, user: dev }
+      monitor:
+        agent: true
+        probes: [ { type: ping }, { type: http, port: 8080, path: /healthz } ]
+      labels: { role: service }
+
+  containers:
+    - name: gateway
+      host: dev-server-01
+      image: registry.lab.local/sensor-gateway:dev
+      ports: ["8080:8080"]
+      env: { LOG_LEVEL: debug, SENSORS: "10.10.0.11" }

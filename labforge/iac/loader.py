@@ -124,7 +124,9 @@ def parse_text(text: str, source: str = "<buffer>",
         if raw is None or node is None:
             continue
         try:
-            docs.append(EnvironmentDoc.model_validate(raw))
+            doc = EnvironmentDoc.model_validate(raw)
+            doc._source = source
+            docs.append(doc)
         except ValidationError as e:
             for err in e.errors():
                 loc = ".".join(str(x) for x in err["loc"])

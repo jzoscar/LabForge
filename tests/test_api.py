@@ -21,23 +21,23 @@ def client(settings, engine):
 
 
 AUTH = {"X-LabForge-Token": "t0ken"}
-REPORT = {"env": "demo", "name": "this-mac", "os": "darwin", "arch": "arm64",
+REPORT = {"env": "local", "name": "this-mac", "os": "darwin", "arch": "arm64",
           "cpu_percent": 12.5, "mem_percent": 40, "disk_percent": 55, "temp_c": 48}
 
 
 def test_agent_report_requires_token(client):
     assert client.post("/api/v1/agent/report", json=REPORT).status_code == 401
     r = client.post("/api/v1/agent/report", json=REPORT, headers=AUTH)
-    assert r.json() == {"address": "demo.host.this-mac", "managed": True}
+    assert r.json() == {"address": "local.host.this-mac", "managed": True}
     r = client.post("/api/v1/agent/report", json={**REPORT, "name": "stranger"}, headers=AUTH)
     assert r.json()["managed"] is False
-    metrics = client.get("/api/v1/resources/demo.host.this-mac/metrics").json()
+    metrics = client.get("/api/v1/resources/local.host.this-mac/metrics").json()
     assert metrics[0]["cpu_percent"] == 12.5
 
 
 def test_resources_and_plan(client):
     rows = client.get("/api/v1/resources", params={"kind": "host"}).json()
-    assert {r["address"] for r in rows} == {"demo.host.this-mac", "demo.host.offline-board"}
+    assert {r["address"] for r in rows} == {"local.host.this-mac", "local.host.offline-board"}
     assert client.get("/api/v1/resources/nope").status_code == 404
     assert client.post("/api/v1/iac/plan", json={}).status_code == 401
     plan = client.post("/api/v1/iac/plan", json={}, headers=AUTH).json()
@@ -57,7 +57,7 @@ def test_api_apply_dry_run(client):
 def test_pages_render(client):
     client.post("/api/v1/agent/report", json=REPORT, headers=AUTH)
     for url in ["/", "/partials/dashboard", "/resources", "/resources?kind=host&q=mac",
-                "/resources/demo.host.this-mac", "/resources/demo.loadbalancer.ui", "/iac", "/runs", "/runs/1"]:
+                "/resources/local.host.this-mac", "/resources/local.loadbalancer.ui", "/iac", "/runs", "/runs/1"]:
         r = client.get(url)
         assert r.status_code == 200, url
     home = client.get("/").text

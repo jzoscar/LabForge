@@ -19,7 +19,7 @@ def run_terraform(
     action: Literal["apply", "destroy"],
     inputs: dict,
 ) -> dict:
-    module = (ctx.base_dir / tf.module).resolve()
+    module = (ctx.dir_for(address.split(".", 1)[0]) / tf.module).resolve()
     ws = workspace(address)
     var_file = (ctx.workdir / "tfvars" / f"{ws}.tfvars.json").resolve()
     if not ctx.dry_run:

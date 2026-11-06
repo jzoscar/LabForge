@@ -65,7 +65,7 @@ def test_create_refuses_existing_and_delete_keeps_copy(ws):
 def test_import_zip_strips_folder_and_rejects_bad_entries(ws):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
-        z.writestr("infra/a.yaml", VALID.replace("name: demo", "name: a"))
+        z.writestr("infra/a.yaml", VALID.replace("name: local", "name: a"))
         z.writestr("infra/sub/b.yml", "not: [valid")
         z.writestr("infra/README.md", "ignored")
         z.writestr("infra/__MACOSX/c.yaml", "ignored")
@@ -99,10 +99,10 @@ def test_diagnostics_point_at_lines():
 
 def test_describe_and_schema():
     envs = describe(load_path(ROOT / "infra"))
-    dev = next(e for e in envs if e.name == "dev")
-    lb = next(r for r in dev.resources if r.kind == "loadbalancer")
-    assert set(lb.depends_on) == {"arm-node-01", "arm-node-02", "lab-vpc", "svc-01"}
-    assert "dev_host_svc_01 --> dev_loadbalancer_test_api" in dev.mermaid
+    staging = next(e for e in envs if e.name == "staging")
+    lb = next(r for r in staging.resources if r.kind == "loadbalancer")
+    assert set(lb.depends_on) == {"stg-app-01", "stg-app-02", "stg-net", "stg-edge-01"}
+    assert "staging_host_stg_edge_01 --> staging_loadbalancer_stg_gateway" in staging.mermaid
     hosts = next(s for s in schema_reference() if s["path"] == "hosts[]")
     platform = next(f for f in hosts["fields"] if f["name"] == "platform")
     assert platform["required"] and platform["type"] == "→ hosts[].platform"
@@ -114,7 +114,11 @@ def test_describe_and_schema():
 
 def test_workspace_pages(client):
     page = client.get("/iac").text
-    assert "IaC workspace" in page and "local.yaml" in page and "Plan for the whole workspace" in page
+    assert "IaC workspace" in page and 'class="env-card' in page and "local.yaml" in page
+    assert "Plan for the whole workspace" in client.get("/iac", params={"tab": "plan"}).text
+    assert "Create and edit" in client.get("/iac", params={"tab": "files"}).text
+    detail = client.get("/iac", params={"env": "local"}).text
+    assert 'id="detail"' in detail and "offline-board" in detail
     editor = client.get("/iac/edit", params={"path": "local.yaml"})
     assert editor.status_code == 200 and "CodeMirror" in editor.text
     assert client.get("/iac/edit", params={"path": "../x.yaml"}).status_code == 400
@@ -124,7 +128,7 @@ def test_workspace_pages(client):
 
 def test_check_reports_problems_structure_and_plan(client):
     ok = client.post("/iac/check", json={"path": "local.yaml", "text": VALID}).json()
-    assert ok["diagnostics"] == [] and ok["envs"][0]["name"] == "demo"
+    assert ok["diagnostics"] == [] and ok["envs"][0]["name"] == "local"
     assert ok["plan"]["counts"]["create"] == 4
 
     bad = client.post("/iac/check", json={"path": "local.yaml", "text": VALID.replace("arm64", "sparc", 1)}).json()
@@ -147,7 +151,7 @@ def test_save_new_import_delete(client):
     files = {f["path"]: f for f in client.get("/api/v1/iac/files").json()}
     assert files["rigs.yaml"]["environments"] == ["rigs"] and files["rigs.yaml"]["problems"] == []
 
-    page = client.post("/iac/import", files=[("files", ("extra.yaml", VALID.replace("name: demo", "name: extra")))])
+    page = client.post("/iac/import", files=[("files", ("extra.yaml", VALID.replace("name: local", "name: extra")))])
     assert "Import results" in page.text and "created" in page.text
     assert client.post("/iac/delete", data={"path": "extra.yaml"}, follow_redirects=False).status_code == 303
     assert "extra.yaml" not in {f["path"] for f in client.get("/api/v1/iac/files").json()}
@@ -162,7 +166,7 @@ def test_apply_single_file_dry_run(client):
 def test_api_put_requires_token_and_honours_if_match(client):
     assert client.put("/api/v1/iac/files/new.yaml", content=VALID).status_code == 401
     headers = {"X-LabForge-Token": "t0ken", "Content-Type": "text/plain"}
-    created = client.put("/api/v1/iac/files/new.yaml", content=VALID.replace("name: demo", "name: new"),
+    created = client.put("/api/v1/iac/files/new.yaml", content=VALID.replace("name: local", "name: new"),
                          headers=headers).json()
     assert created["problems"] == []
     stale = client.put("/api/v1/iac/files/new.yaml", content=VALID, headers={**headers, "If-Match": "0" * 16})
@@ -178,4 +182,17 @@ def test_editing_can_be_disabled(settings, tmp_path):
     with TestClient(create_app(settings)) as c:
         assert c.post("/iac/save", json={"path": "local.yaml", "text": VALID}).status_code == 403
         assert c.post("/iac/new", data={"name": "x"}).status_code == 403
-        assert "Read-only" in c.get("/iac").text
+        assert "Read-only" in c.get("/iac", params={"tab": "files"}).text
+
+
+def test_environments_grouped_by_tier_and_scope(settings):
+    settings.iac_path = ROOT / "infra"
+    with TestClient(create_app(settings)) as c:
+        page = c.get("/iac").text
+        for env in ("dev", "test-unit", "test-integration", "staging", "demo"):
+            assert f'<span class="env-name">{env}</span>' in page
+        test_tab = c.get("/iac", params={"tab": "test"}).text
+        assert "test-unit" in test_tab and '<span class="env-name">staging</span>' not in test_tab
+        scoped = c.get("/iac", params={"tab": "all", "label": "integration"}).text
+        assert '<span class="env-name">test-integration</span>' in scoped
+        assert '<span class="env-name">test-unit</span>' not in scoped
