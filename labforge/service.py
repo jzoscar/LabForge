@@ -54,6 +54,7 @@ def execute_run(
     destroy_envs: tuple[str, ...] = (),
     runner_factory: RunnerFactory | None = None,
     echo: Callable[[str], None] | None = None,
+    change_request: int | None = None,
 ) -> Run:
     """Plan + apply, streaming log lines into the Run row. Never raises for apply failures."""
 
@@ -83,7 +84,12 @@ def execute_run(
         with Session(engine) as session:
             try:
                 docs, plan = make_plan(session, path, destroy_envs)
-                guard_prod(plan, allow_prod)
+                approved = _production_gate(engine, settings, plan, path, dry_run, change_request)
+                prod_ok = allow_prod or dry_run or approved is not None
+                guard_prod(plan, prod_ok)
+                if approved is not None:
+                    log(f"production change request #{approved.id} approved by "
+                        f"{', '.join(json.loads(approved.approvals_json))}")
                 states = {s.address: s.spec for s in session.exec(select(ResourceState))}
                 runner = (runner_factory or Runner)(dry_run, log)
                 ctx = ApplyContext(
@@ -97,9 +103,13 @@ def execute_run(
                     env_dirs={d.metadata.name: Path(d._source).parent for d in docs if d._source},
                 )
                 log(f"plan: {plan.counts()} for env(s) {', '.join(plan.envs) or '-'}" + (" [dry-run]" if dry_run else ""))
-                done = apply_plan(plan, session, ctx, allow_prod=allow_prod)
+                done = apply_plan(plan, session, ctx, allow_prod=prod_ok)
                 log("apply complete" + (" (dry-run, no state written)" if dry_run else ""))
                 _finish(engine, run_id, "success", {"planned": plan.counts(), "applied": done})
+                if approved is not None and not dry_run:
+                    from labforge.release import mark_applied
+
+                    mark_applied(engine, approved.id)
             except Exception as e:
                 log(f"error: {e}")
                 _finish(engine, run_id, "failed", {"error": str(e)})
@@ -116,13 +126,35 @@ def execute_run(
         return run
 
 
+def workspace_relative(settings: Settings, path: Path) -> str:
+    root = settings.workspace().root
+    try:
+        rel = path.resolve().relative_to(root).as_posix()
+    except ValueError:
+        return str(path)
+    return "" if rel == "." else rel
+
+
+def _production_gate(engine: Engine, settings: Settings, plan, path: Path, dry_run: bool, change_request: int | None):
+    """Production changes need an approved change request when a ReleasePolicy exists (or one is given)."""
+    from labforge import release
+
+    if dry_run or not release.prod_envs(plan):
+        return None
+    pol = release.policy(settings.workspace().root)
+    if pol is None and change_request is None:
+        return None  # no release policy: the plain --allow-prod guard applies
+    return release.check_production(engine, plan, workspace_relative(settings, path), change_request, pol)
+
+
 def start_run_background(engine: Engine, settings: Settings, path: Path, *, dry_run: bool,
-                         allow_prod: bool, source: str) -> int:
+                         allow_prod: bool, source: str, change_request: int | None = None) -> int:
     run_id = create_run(engine, source, dry_run)
 
     def target() -> None:
         try:
-            execute_run(engine, settings, run_id, path, dry_run=dry_run, allow_prod=allow_prod)
+            execute_run(engine, settings, run_id, path, dry_run=dry_run, allow_prod=allow_prod,
+                        change_request=change_request)
         except BusyError:
             pass
 

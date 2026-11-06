@@ -152,7 +152,8 @@ def sync(path: Path | None = PathArg,
         raise typer.Exit(1)
 
 
-def _run(path: Path, *, dry_run: bool, allow_prod: bool, yes: bool, destroy_envs: tuple[str, ...] = ()) -> None:
+def _run(path: Path, *, dry_run: bool, allow_prod: bool, yes: bool, destroy_envs: tuple[str, ...] = (),
+         change_request: int | None = None) -> None:
     from labforge import service
 
     settings = _settings()
@@ -180,7 +181,7 @@ def _run(path: Path, *, dry_run: bool, allow_prod: bool, yes: bool, destroy_envs
     run_id = service.create_run(engine, f"cli:{path}", dry_run, action)
     typer.echo("")
     run = service.execute_run(engine, settings, run_id, path, dry_run=dry_run, allow_prod=allow_prod,
-                              destroy_envs=destroy_envs, echo=typer.echo)
+                              destroy_envs=destroy_envs, echo=typer.echo, change_request=change_request)
     if run.status != "success":
         typer.secho(f"\n✗ run #{run_id} failed", fg="red", err=True)
         raise typer.Exit(1)
@@ -193,9 +194,10 @@ def apply(
     dry_run: bool = typer.Option(False, "--dry-run", help="print commands without executing or writing state"),
     allow_prod: bool = typer.Option(False, "--allow-prod", help="permit changes to tier: prod"),
     yes: bool = typer.Option(False, "--yes", "-y", help="skip confirmation"),
+    change_request: int | None = typer.Option(None, "--change-request", help="approved production change request"),
 ) -> None:
     """Converge real infrastructure to the IaC declaration."""
-    _run(_path(path, _settings()), dry_run=dry_run, allow_prod=allow_prod, yes=yes)
+    _run(_path(path, _settings()), dry_run=dry_run, allow_prod=allow_prod, yes=yes, change_request=change_request)
 
 
 @app.command()
@@ -537,6 +539,84 @@ def cra_affected(component: str, below: str | None = typer.Option(None, "--below
         typer.secho("no firmware with an SBOM contains it", fg="green")
     if r["devices"]:
         raise typer.Exit(1)
+
+
+release_app = typer.Typer(help="Release guardrails: gate, staged rollout.", no_args_is_help=True)
+app.add_typer(release_app, name="release")
+change_app = typer.Typer(help="Production change requests and approvals.", no_args_is_help=True)
+app.add_typer(change_app, name="change")
+
+
+@release_app.command("gate")
+def release_gate(version: str, server: str = ServerOpt) -> None:
+    """May this firmware version ship? Exit 1 if not."""
+    r = _rig_request("GET", server, f"/releases/{version}/gate", None)
+    for c in r["checks"]:
+        typer.secho(f"{'✓' if c['ok'] else '✗'} {c['check']}: {c['detail']}", fg="green" if c["ok"] else "red")
+    typer.secho(f"{version}: {'may ship' if r['ok'] else 'blocked'}", fg="green" if r["ok"] else "red")
+    if not r["ok"]:
+        raise typer.Exit(1)
+
+
+@release_app.command("rollout")
+def release_rollout(version: str, env: str | None = typer.Option(None, "--env"),
+                    selector: list[str] = typer.Option([], "--selector", help="host label key=value (repeatable)"),
+                    canary: int | None = typer.Option(None, "--canary"), batch: int | None = typer.Option(None, "--batch"),
+                    bake: int | None = typer.Option(None, "--bake", help="seconds to watch each batch"),
+                    artifact: Path | None = typer.Option(None, "--artifact", exists=True, dir_okay=False),
+                    force: bool = typer.Option(False, "--force", help="roll out past a failed gate"),
+                    wait: bool = typer.Option(True, "--wait/--no-wait"),
+                    server: str = ServerOpt, token: str | None = TokenOpt) -> None:
+    """Staged rollout: canary, bake, batches; automatic rollback when a device turns unhealthy."""
+    import time
+
+    sha256, _ = _artifact(artifact)
+    body = {"env": env, "selector": dict(s.split("=", 1) for s in selector) if selector else None, "canary": canary,
+            "batch_size": batch, "bake_seconds": bake, "sha256": sha256, "force": force}
+    rollout_id = _rig_request("POST", server, f"/releases/{version}/rollout", token, json=body)["rolloutId"]
+    typer.echo(f"rollout #{rollout_id} started")
+    printed = 0
+    while wait:
+        r = _rig_request("GET", server, f"/rollouts/{rollout_id}", None)
+        lines = r["log"].splitlines()
+        for line in lines[printed:]:
+            typer.echo(line)
+        printed = len(lines)
+        if r["status"] not in ("running", "aborting"):
+            typer.secho(f"rollout #{rollout_id}: {r['status']}", fg="green" if r["status"] == "succeeded" else "red")
+            if r["status"] != "succeeded":
+                raise typer.Exit(1)
+            break
+        time.sleep(1)
+
+
+@change_app.command("request")
+def change_request(path: str = typer.Argument("", help="workspace-relative file or directory"),
+                   reason: str = typer.Option(..., "--reason"), server: str = ServerOpt, token: str | None = TokenOpt) -> None:
+    """Ask for approval of the current plan of PATH on the server."""
+    cr = _rig_request("POST", server, "/changes", token, json={"path": path, "reason": reason})
+    typer.echo(f"change request #{cr['id']} ({cr['envs']}): {cr['status']}, waiting for approval")
+
+
+@change_app.command("approve")
+def change_approve(change_id: int, server: str = ServerOpt, token: str | None = TokenOpt) -> None:
+    cr = _rig_request("POST", server, f"/changes/{change_id}/approve", token)
+    typer.echo(f"change request #{change_id}: {cr['status']}")
+
+
+@change_app.command("reject")
+def change_reject(change_id: int, server: str = ServerOpt, token: str | None = TokenOpt) -> None:
+    cr = _rig_request("POST", server, f"/changes/{change_id}/reject", token)
+    typer.echo(f"change request #{change_id}: {cr['status']}")
+
+
+@change_app.command("list")
+def change_list(server: str = ServerOpt) -> None:
+    import json
+
+    for c in _rig_request("GET", server, "/changes", None):
+        typer.echo(f"#{c['id']:<4} {c['status']:<9} {c['envs']:<20} by {c['requested_by']:<20} "
+                   f"approved by {', '.join(json.loads(c['approvals_json'])) or '-'}  {c['reason']}")
 
 
 @app.command()

@@ -5,7 +5,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlmodel import Session, select
+from sqlmodel import select
 
 from conftest import RecordingRunner, write_env
 from labforge import builds

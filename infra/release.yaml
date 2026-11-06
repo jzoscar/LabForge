@@ -1,0 +1,19 @@
+# What it takes to ship firmware, and how it reaches devices.
+apiVersion: labforge/v1
+kind: ReleasePolicy
+metadata:
+  name: firmware-release
+  description: Gate, staged rollout and production change rules
+spec:
+  gate:
+    requiredPools: [ sim-sensor ]   # add sensor-a, ... for the real rig pools
+    requireSbom: true               # EU CRA: no release without its SBOM
+  rollout:
+    env: sim-lab                    # the production line stations, once declared
+    selector: { role: sensor }
+    canary: 1
+    batchSize: 2
+    bakeSeconds: 20
+  approvals: 1
+  changeWindows:
+    - { days: [ tue, wed, thu ], start: "09:00", end: "16:00" }

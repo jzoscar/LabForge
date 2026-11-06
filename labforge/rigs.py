@@ -296,6 +296,30 @@ def _install(host: Host, state: ResourceState, version: str, sha256: str | None,
         raise RigError(f"flash failed: {state.name} answered HTTP {r.status_code}", 502)
 
 
+def install_and_wait(state: ResourceState, version: str, sha256: str | None, size: int | None,
+                     secrets: SecretResolver, wait_seconds: float) -> tuple[bool, dict | None, Health | None]:
+    """Flash a device and wait until it reports `version` and passes its health checks."""
+    url = _device_url(state)
+    started = time.monotonic()
+    _install(Host.model_validate(state.spec), state, version, sha256, size, secrets)
+    running, health = None, None
+    while time.monotonic() < started + wait_seconds:
+        time.sleep(0.5)
+        running = _device_version(url)
+        if running and running.get("firmware") == version:
+            health = check(state, secrets)
+            if health.healthy:
+                break
+    ok = bool(running and running.get("firmware") == version and health and health.healthy)
+    return ok, running, health
+
+
+def running_version(state: ResourceState) -> str | None:
+    url = device_endpoints(state.spec).get("http")
+    running = _device_version(url) if url else None
+    return running.get("firmware") if running else None
+
+
 def device_status(engine: Engine, lease_id: int, secrets: SecretResolver | None = None) -> dict:
     """Health and running firmware of a leased device."""
     with Session(engine) as session:
@@ -316,20 +340,8 @@ def flash(engine: Engine, lease_id: int, version: str, *, sha256: str | None = N
     secrets = secrets or SecretResolver()
     with Session(engine) as session:
         lease, state = _leased(session, lease_id)
-        url = _device_url(state)
         started = time.monotonic()
-        _install(Host.model_validate(state.spec), state, version, sha256, size, secrets)
-
-        deadline = started + wait_seconds
-        running, health = None, None
-        while time.monotonic() < deadline:
-            time.sleep(0.5)
-            running = _device_version(url)
-            if running and running.get("firmware") == version:
-                health = check(state, secrets)
-                if health.healthy:
-                    break
-        ok = bool(running and running.get("firmware") == version and health and health.healthy)
+        ok, running, health = install_and_wait(state, version, sha256, size, secrets, wait_seconds)
         lease.note = "; ".join(filter(None, [lease.note, f"flashed {version}" + (f" (sha256 {sha256[:12]})" if sha256 else "")
                                              + ("" if ok else " - device did not come back healthy")]))
         session.add(lease)

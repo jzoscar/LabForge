@@ -19,6 +19,7 @@ from labforge.web_rigs import router as rigs_router
 from labforge.web_alerts import router as alerts_router
 from labforge.web_builds import router as builds_router
 from labforge.web_cra import router as cra_router
+from labforge.web_release import router as release_router
 from labforge.metrics import router as metrics_router
 
 log = logging.getLogger("labforge")
@@ -47,6 +48,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(alerts_router)
     app.include_router(builds_router)
     app.include_router(cra_router)
+    app.include_router(release_router)
     app.include_router(metrics_router)
     app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 

@@ -256,6 +256,29 @@ self-hosted runner in the lab. Several LabForge instances can share one PostgreS
 (`pip install 'labforge[postgres]'`, `LABFORGE_DB_URL=postgresql+psycopg://…`): one is elected to run
 monitoring and alerting, and applies and rig checkouts are serialized across them.
 
+## Releases
+
+A `ReleasePolicy` in the IaC workspace ([infra/release.yaml](infra/release.yaml)) says what it takes
+to ship firmware and how it reaches devices.
+
+```bash
+labforge release gate 1.5.0                    # passed on every required pool? SBOM on file? exit 1 if not
+labforge release rollout 1.5.0 --artifact build/pulse
+```
+
+- **Gate**: the latest device test of exactly that version passed on every required pool, and the
+  version's SBOM is on file
+- **Staged rollout**: flash the canary, watch it for `bakeSeconds`, then the next batch. The first device
+  that does not come back healthy - or degrades while baking - rolls every flashed device back to the
+  firmware it had before. Abort rolls back too. The **Releases** page shows each rollout's log
+- **Production changes**: when a plan changes a `tier: prod` environment, a real apply needs
+  `--change-request <id>`: a request for exactly that plan (`labforge change request <path> --reason …`),
+  approved by someone other than the requester (`labforge change approve <id>`), applied inside a
+  change window. If the plan changes after approval, the request no longer matches. Dry-runs need nothing
+
+The simulator models a bad build: a version ending in `-broken` crashes on every boot, so
+`labforge release rollout 2.0.0-broken --force` shows the canary failing and being rolled back.
+
 ## Managing your lab
 
 `infra/` declares a complete set of R&D environments, one folder per tier. Each environment's size
@@ -423,6 +446,7 @@ boards; on Windows, rely on the BMC (Redfish) for temperatures.
 | `labforge/alerting.py` · `notify.py` · `metrics.py` | Alert engine, channel adapters, Prometheus metrics |
 | `labforge/builds.py` · `web_builds.py` | Build-run ingestion, pipeline statistics, suggestions |
 | `labforge/auth.py` · `locks.py` · `cra.py` | Tokens, roles, SSO, audit; multi-instance locks; CRA traceability |
+| `labforge/release.py` · `web_release.py` | Release gate, staged rollout with rollback, production change requests |
 | `labforge/sim.py` | Simulated ARM sensors with Redfish BMCs, a switched PDU, and fault injection |
 | `labforge/agent.py` | Host agent |
 
@@ -462,7 +486,7 @@ pytest
 | **M3 Alerting & on-call** | ✅ Done | Push problems to the right person via Slack / Teams / WhatsApp / SMS |
 | **M4 Build farm capacity & speed** | ✅ Done | Short queues, warm caches, build time that is measured and optimised |
 | **M5 Security, compliance & GitOps** | ✅ Done | Safe multi-user operation and CRA traceability |
-| **M6 Production release guardrails** | ⏳ Planned | Releases for customer production lines pass real devices first, then roll out in stages |
+| **M6 Production release guardrails** | ✅ Done (simulated stations) | Releases for customer production lines pass real devices first, then roll out in stages |
 
 ### M0 Platform foundation ✅
 
@@ -541,10 +565,11 @@ QEMU proves the ARM binary runs; it does not prove the product works on the devi
 
 ### M6 Production release guardrails
 
-- [ ] Release gate: a version must pass the device test rigs for every product family before it can ship
-- [ ] Staged rollout: ship to one internal production-line station first (canary), widen after watching health metrics
-- [ ] Automatic rollback to the known-good firmware when health metrics degrade
-- [ ] Change approval, change windows, separate permissions and network isolation for production
+- [x] Release gate: a version must pass the device test rigs for every required pool (the latest test of that exact version) and have its SBOM on file
+- [x] Staged rollout: canary first, bake while watching health, then batches
+- [x] Automatic rollback to the previous firmware when a device does not come back healthy or degrades while baking; abort rolls back too
+- [x] Change approval and change windows for production: an approved change request for exactly the planned changes, approved by someone other than the requester; separate permissions through RBAC environment scopes
+- [ ] Network isolation of production *(infrastructure: VLANs / firewalls; LabForge can declare the networks)*
 
 ## Getting started: from demo to a real lab (M1)
 

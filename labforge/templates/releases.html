@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Releases{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Releases</h1>
+  <span class="muted">Ship only what passed on real devices, roll out in stages, change production only with approval</span>
+</div>
+{% if message %}<p class="notice ok">{{ message }}</p>{% endif %}
+{% if error %}<p class="notice error">{{ error }}</p>{% endif %}
+
+<div class="grid2">
+  <section class="card">
+    <h2>Release gate</h2>
+    <form class="apply" method="get"><input name="version" value="{{ version }}" placeholder="firmware version" required><button>Check</button></form>
+    {% if policy %}<p class="sub">Required pools: {{ policy.spec.gate.required_pools|join(', ') or 'none' }} · SBOM required: {{ 'yes' if policy.spec.gate.require_sbom else 'no' }}</p>
+    {% else %}<p class="sub">No ReleasePolicy in the workspace: only the SBOM is checked.</p>{% endif %}
+    {% if gate %}
+    <ul class="outline">
+      {% for c in gate.checks %}<li><span class="{{ 'ok' if c.ok else 'err' }}">{{ '✓' if c.ok else '✗' }}</span> {{ c.check }} <span class="sub">{{ c.detail }}</span></li>{% endfor %}
+    </ul>
+    <p><span class="badge {{ 's-up' if gate.ok else 's-down' }}">{{ gate.version }} {{ 'may ship' if gate.ok else 'blocked' }}</span></p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Staged rollout</h2>
+    {% set d = policy.spec.rollout if policy else none %}
+    {% if ui_edit %}
+    <form method="post" action="/releases/rollout" class="stack">
+      <label>Version <input name="version" value="{{ version }}" required></label>
+      <label>Environment <input name="env" value="{{ d.env if d and d.env else '' }}" placeholder="target environment"></label>
+      <label>Host selector <input name="selector" value="{% if d %}{% for k, v in d.selector.items() %}{{ k }}={{ v }}{{ ',' if not loop.last }}{% endfor %}{% endif %}" placeholder="role=station"></label>
+      <div class="apply">
+        <label class="inline">Canary <input name="canary" type="number" min="1" value="{{ d.canary if d else 1 }}" style="width:4em"></label>
+        <label class="inline">Batch <input name="batch" type="number" min="1" value="{{ d.batch_size if d else 2 }}" style="width:4em"></label>
+        <label class="inline">Bake (s) <input name="bake" type="number" min="0" value="{{ d.bake_seconds if d else 60 }}" style="width:5em"></label>
+        <label class="inline"><input type="checkbox" name="force" value="true"> past a failed gate</label>
+      </div>
+      <button>Start rollout</button>
+    </form>
+    {% endif %}
+  </section>
+</div>
+
+<section class="card">
+  <h2>Rollouts</h2>
+  {% for r, batches in rollouts %}
+  <details {{ 'open' if loop.first }} class="rollout">
+    <summary><span class="badge ro-{{ r.status }}">{{ r.status }}</span> <b>#{{ r.id }}</b> <span class="mono">{{ r.version }}</span> → {{ r.env }}
+      <span class="sub">· batch {{ [r.current_batch + 1, batches|length]|min }}/{{ batches|length }} · by {{ r.created_by }} · {{ r.started_at|ago }}</span>
+      {% if r.status == 'running' and ui_edit %}<form method="post" action="/releases/abort" class="inline-form"><input type="hidden" name="rollout_id" value="{{ r.id }}"><button class="ghost">Abort &amp; roll back</button></form>{% endif %}
+    </summary>
+    <pre class="log">{{ r.log }}</pre>
+  </details>
+  {% else %}<p class="muted">No rollouts yet.</p>{% endfor %}
+</section>
+
+<section class="card">
+  <h2>Production change requests</h2>
+  <p class="sub">An apply that changes a <code>tier: prod</code> environment needs an approved request for exactly that plan{% if policy %}, {{ policy.spec.approvals }} approval(s) by someone other than the requester{% if policy.spec.change_windows %}, inside {% for w in policy.spec.change_windows %}{{ w.days|join(',') }} {{ w.start }}–{{ w.end }} UTC{{ '; ' if not loop.last }}{% endfor %}{% endif %}{% endif %}.</p>
+  {% if ui_edit %}
+  <form method="post" action="/releases/change" class="apply">
+    <input name="path" placeholder="IaC path, e.g. prod/line-1.yaml (empty = all)">
+    <input name="reason" placeholder="reason / ticket" required size="28">
+    <input name="name" placeholder="your name" size="14">
+    <button>Request approval</button>
+  </form>
+  {% endif %}
+  <table>
+    <thead><tr><th>#</th><th>Status</th><th>Path</th><th>Environments</th><th>Plan</th><th>Requested</th><th>Approvals</th><th></th></tr></thead>
+    <tbody>
+    {% for c, approvals, summary in changes %}
+    <tr>
+      <td>{{ c.id }}</td><td><span class="badge cr-{{ c.status }}">{{ c.status }}</span></td>
+      <td class="mono sub">{{ c.path or 'workspace' }}</td><td class="mono">{{ c.envs }}</td>
+      <td class="sub" title="{{ summary.changes|join('\n') }}">+{{ summary.counts['create'] }} ~{{ summary.counts['update'] }} -{{ summary.counts['delete'] }} <span class="mono">{{ c.plan_hash }}</span></td>
+      <td class="sub">{{ c.requested_by }} · {{ c.created_at|ago }}<div>{{ c.reason }}</div></td>
+      <td class="sub">{{ approvals|join(', ') or '—' }}</td>
+      <td class="nowrap">{% if ui_edit and c.status == 'pending' %}
+        <form method="post" action="/releases/decide" class="inline-form"><input type="hidden" name="change_id" value="{{ c.id }}"><input name="name" placeholder="approver" size="9"><button name="decision" value="approve" class="secondary">Approve</button><button name="decision" value="reject" class="ghost">Reject</button></form>
+      {% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" class="muted">No change requests.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

@@ -16,7 +16,8 @@ A switched PDU lives on the control port too (outlet N powers the Nth device):
 
 Faults model what goes wrong on real rigs: "crash" (firmware dead, hardware fine - a
 power cycle fixes it), "hang" (device stops answering in time - a power cycle fixes it),
-"overheat" (hardware problem - survives reboots, needs a human).
+"overheat" (hardware problem - survives reboots, needs a human). A firmware version ending in
+"-broken" models a bad build: it crashes on every boot until another version is flashed.
 """
 
 from __future__ import annotations
@@ -112,7 +113,7 @@ class _DeviceHandler(_Handler):
 
     def _unavailable(self) -> bool:
         d = self.device
-        if d.power != "On" or d.booting or d.fault == "crash":
+        if d.power != "On" or d.booting or d.fault == "crash" or d.firmware.endswith("-broken"):
             self._drop()
             return True
         if d.fault == "hang":
@@ -137,7 +138,12 @@ class _DeviceHandler(_Handler):
             self._json(404, {"error": "not found"})
 
     def do_POST(self) -> None:
-        if self._unavailable():
+        # The updater lives in a recovery partition (A/B): it takes a new image even when the running
+        # firmware crashed, as long as the device has power and is not hung.
+        d = self.device
+        if self.path == "/firmware" and d.power == "On" and not d.booting and d.fault != "hang":
+            pass
+        elif self._unavailable():
             return
         if self.path != "/firmware":
             self._json(404, {"error": "not found"})

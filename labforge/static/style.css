@@ -87,6 +87,12 @@ tr.dim td { opacity: .55; }
 .legend { width: 8px; height: 8px; border-radius: 2px; margin: 0 3px 0 6px; vertical-align: middle; }
 .st-1 { background: #2f6fde; } .st-2 { background: #1f8f4e; } .st-3 { background: #b7791f; }
 .st-4 { background: #7a4fd0; } .st-5 { background: #c53030; } .st-6 { background: #8a92a3; }
+.ro-succeeded, .cr-approved, .cr-applied { background: var(--ok-bg); color: var(--ok); }
+.ro-running, .ro-aborting, .cr-pending { background: var(--warn-bg); color: var(--warn); }
+.ro-rolled_back, .ro-failed, .ro-aborted, .cr-rejected { background: var(--err-bg); color: var(--err); }
+details.rollout { border-bottom: 1px solid var(--line); padding: 6px 0; }
+details.rollout summary { cursor: pointer; }
+details.rollout pre { margin-top: 6px; }
 .rig-free, .res-passed { background: var(--ok-bg); color: var(--ok); }
 .rig-leased, .rig-active { background: var(--warn-bg); color: var(--warn); }
 .util { display: grid; grid-template-columns: 110px 1fr 48px; gap: 6px; align-items: center; }

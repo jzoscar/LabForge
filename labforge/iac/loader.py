@@ -15,7 +15,7 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
-from labforge.iac.spec import AccessPolicyDoc, AlertPolicyDoc, EnvironmentDoc
+from labforge.iac.spec import AccessPolicyDoc, AlertPolicyDoc, EnvironmentDoc, ReleasePolicyDoc
 
 _VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 # Cross-reference errors name the offending resource: "host arm1: unknown subnet ..."
@@ -102,7 +102,8 @@ def _messages(err: dict) -> list[str]:
     return [m for m in msg.split("; ") if m] if err["type"] == "value_error" else [msg]
 
 
-KINDS = {"Environment": EnvironmentDoc, "AlertPolicy": AlertPolicyDoc, "AccessPolicy": AccessPolicyDoc}
+KINDS = {"Environment": EnvironmentDoc, "AlertPolicy": AlertPolicyDoc, "AccessPolicy": AccessPolicyDoc,
+         "ReleasePolicy": ReleasePolicyDoc}
 
 
 def parse_text(text: str, source: str = "<buffer>",

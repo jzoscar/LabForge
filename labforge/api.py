@@ -44,6 +44,7 @@ class PlanRequest(BaseModel):
 class ApplyRequest(PlanRequest):
     dry_run: bool = True
     allow_prod: bool = False
+    change_request: int | None = None  # approved production change request
 
 
 class AgentPayload(BaseModel):
@@ -153,7 +154,8 @@ def apply(req: ApplyRequest, request: Request, who: Principal = Depends(requires
     require_envs(who, _env_names(path))
     audit(request.app.state.engine, who, "apply.start", str(path), f"dry_run={req.dry_run}", "api")
     run_id = service.start_run_background(request.app.state.engine, request.app.state.settings, path,
-                                          dry_run=req.dry_run, allow_prod=req.allow_prod, source=f"api:{path}")
+                                          dry_run=req.dry_run, allow_prod=req.allow_prod, source=f"api:{path}",
+                                          change_request=req.change_request)
     return {"runId": run_id}
 
 
@@ -579,3 +581,117 @@ def cra_affected(component: str, below: str | None = None, versions: str | None 
     if format == "markdown":
         return Response(report_markdown(result), media_type="text/markdown")
     return result
+
+
+# --- releases: gate, staged rollout, production change requests ------------------------------
+
+
+class RolloutRequest(BaseModel):
+    env: str | None = None
+    selector: dict[str, str] | None = None
+    canary: int | None = None
+    batch_size: int | None = None
+    bake_seconds: int | None = None
+    sha256: str | None = None
+    force: bool = False  # roll out past a failed gate
+
+
+class ChangeCreate(BaseModel):
+    path: str = ""  # workspace-relative file or directory; "" = whole workspace
+    reason: str = ""
+
+
+def _release_call(fn):
+    from labforge.release import ReleaseError
+
+    try:
+        return fn()
+    except ReleaseError as e:
+        raise HTTPException(e.status, e.detail) from e
+
+
+def _release_policy(request: Request):
+    from labforge.release import policy
+
+    return policy(request.app.state.settings.workspace().root)
+
+
+@router.get("/releases/{version}/gate")
+def release_gate(version: str, request: Request, session: Session = Depends(get_session)) -> dict:
+    from labforge.release import gate
+
+    return gate(session, version, _release_policy(request))
+
+
+@router.post("/releases/{version}/rollout", status_code=202)
+def release_rollout(version: str, req: RolloutRequest, request: Request,
+                    who: Principal = Depends(requires("admin"))) -> dict:
+    from labforge.release import start_rollout
+
+    rollout_id = _release_call(lambda: start_rollout(
+        request.app.state.engine, _release_policy(request), version, env=req.env, selector=req.selector,
+        canary=req.canary, batch_size=req.batch_size, bake_seconds=req.bake_seconds, sha256=req.sha256,
+        by=who.name, force=req.force))
+    audit(request.app.state.engine, who, "release.rollout", version, f"rollout {rollout_id}" + (" FORCED" if req.force else ""), "api")
+    return {"rolloutId": rollout_id}
+
+
+@router.get("/rollouts")
+def list_rollouts(session: Session = Depends(get_session)) -> list[dict]:
+    from labforge.models import Rollout
+
+    return [r.model_dump(exclude={"log"}) for r in session.exec(select(Rollout).order_by(Rollout.id.desc()).limit(50))]
+
+
+@router.get("/rollouts/{rollout_id}")
+def get_rollout(rollout_id: int, session: Session = Depends(get_session)) -> dict:
+    from labforge.models import Rollout
+
+    r = session.get(Rollout, rollout_id)
+    if not r:
+        raise HTTPException(404, "rollout not found")
+    return r.model_dump()
+
+
+@router.post("/rollouts/{rollout_id}/abort", status_code=202)
+def abort_rollout(rollout_id: int, request: Request, who: Principal = Depends(requires("admin"))) -> dict:
+    from labforge.release import abort
+
+    _release_call(lambda: abort(request.app.state.engine, rollout_id))
+    audit(request.app.state.engine, who, "release.abort", str(rollout_id), "", "api")
+    return {"rolloutId": rollout_id, "status": "aborting"}
+
+
+@router.post("/changes", status_code=201)
+def create_change(req: ChangeCreate, request: Request, session: Session = Depends(get_session),
+                  who: Principal = Depends(requires("operator"))) -> dict:
+    from labforge.release import request_change
+
+    ws = request.app.state.settings.workspace()
+    target = ws.root / req.path if req.path else ws.root
+    try:
+        _, plan_ = service.make_plan(session, target)
+    except LoadError as e:
+        raise HTTPException(422, {"errors": e.errors}) from e
+    cr = _release_call(lambda: request_change(request.app.state.engine, plan_, req.path, req.reason, who.name))
+    audit(request.app.state.engine, who, "change.request", req.path or "workspace", f"#{cr.id}: {req.reason}", "api")
+    return cr.model_dump()
+
+
+@router.get("/changes")
+def list_changes(session: Session = Depends(get_session)) -> list[dict]:
+    from labforge.models import ChangeRequest
+
+    return [c.model_dump() for c in session.exec(select(ChangeRequest).order_by(ChangeRequest.id.desc()).limit(100))]
+
+
+@router.post("/changes/{change_id}/{decision}")
+def decide_change(change_id: int, decision: str, request: Request, who: Principal = Depends(requires("admin"))) -> dict:
+    from labforge.release import decide
+
+    if decision not in ("approve", "reject"):
+        raise HTTPException(404, "use approve or reject")
+    cr = _release_call(lambda: decide(request.app.state.engine, change_id, who.name, decision == "approve",
+                                      _release_policy(request)))
+    audit(request.app.state.engine, who, f"change.{decision}", f"#{change_id}", cr.status, "api")
+    return cr.model_dump()
