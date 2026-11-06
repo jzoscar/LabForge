@@ -147,8 +147,20 @@ def checkout(engine: Engine, pool: str, holder: str, *, ttl_seconds: int = 1800,
     secrets = secrets or SecretResolver()
     if not holder.strip():
         raise RigError("holder is required (e.g. the CI job URL)")
-    # One checkout at a time, so two jobs never get the same device.
-    with _checkout_lock, Session(engine) as session:
+    from labforge.locks import LockBusy, held
+
+    # One checkout per pool at a time - across threads and across LabForge instances - so two jobs
+    # never get the same device.
+    try:
+        with _checkout_lock, held(engine, f"checkout:{pool}", ttl_seconds=heal_wait + 120, wait_seconds=60):
+            return _checkout(engine, pool, holder, ttl_seconds, purpose, secrets, heal_wait, queued_seconds)
+    except LockBusy as e:
+        raise RigError(f"checkout busy: {e}", 503) from e
+
+
+def _checkout(engine: Engine, pool: str, holder: str, ttl_seconds: int, purpose: str, secrets: SecretResolver,
+              heal_wait: float, queued_seconds: float | None) -> dict:
+    with Session(engine) as session:
         members = pool_members(session, pool)
         if not members:
             raise RigError(f"unknown or empty pool {pool!r}", 404)
@@ -323,8 +335,11 @@ def flash(engine: Engine, lease_id: int, version: str, *, sha256: str | None = N
         session.add(lease)
         session.commit()
         if ok:
+            from labforge.cra import record_firmware
+
             lease.firmware_version, lease.firmware_sha256 = version, sha256
             session.add(lease)
+            record_firmware(session, state.address, version, sha256, "flash")
             session.commit()
         if not ok:
             raise RigError(f"{state.name} did not come back healthy on {version} within {wait_seconds:.0f}s", 504,

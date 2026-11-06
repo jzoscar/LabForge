@@ -224,3 +224,71 @@ class AuditEvent(SQLModel, table=True):
     target: str = ""
     detail: str = ""
     source: str = ""  # web | api | cli
+
+
+class FirmwareSeen(SQLModel, table=True):
+    """Firmware a device was seen running: from a flash, or from its version endpoint."""
+
+    __table_args__ = (UniqueConstraint("address", "version"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    address: str = Field(index=True)
+    version: str = Field(index=True)
+    sha256: str | None = None
+    source: str = "probe"  # flash | probe
+    first_seen: datetime = Field(default_factory=utcnow)
+    last_seen: datetime = Field(default_factory=utcnow, index=True)
+
+
+class Sbom(SQLModel, table=True):
+    """The software bill of materials of one firmware version (CycloneDX or SPDX JSON)."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    version: str = Field(index=True, unique=True)
+    format: str = "cyclonedx"
+    component_count: int = 0
+    components_json: str = "[]"  # [{name, version, purl}]
+    uploaded_at: datetime = Field(default_factory=utcnow)
+
+
+class DbLock(SQLModel, table=True):
+    """A lease-style lock shared by every LabForge instance on the same database."""
+
+    name: str = Field(primary_key=True)
+    owner: str
+    expires_at: datetime
+
+
+class Rollout(SQLModel, table=True):
+    """A staged firmware rollout: canary, bake, batches; rolled back on the first unhealthy device."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    version: str = Field(index=True)
+    sha256: str | None = None
+    env: str
+    selector_json: str = "{}"
+    batches_json: str = "[]"  # [[address, ...], ...]; batch 0 is the canary
+    previous_json: str = "{}"  # address -> firmware before the rollout (for rollback)
+    bake_seconds: int = 60
+    status: str = Field(default="running", index=True)  # running | succeeded | rolled_back | failed | aborted
+    current_batch: int = 0
+    created_by: str = ""
+    log: str = ""
+    started_at: datetime = Field(default_factory=utcnow)
+    finished_at: datetime | None = None
+
+
+class ChangeRequest(SQLModel, table=True):
+    """Approval for a production change: the exact plan someone else agreed to."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    path: str  # IaC file or directory, relative to the workspace ("" = whole workspace)
+    envs: str = ""
+    plan_hash: str
+    summary_json: str = "{}"
+    reason: str = ""
+    requested_by: str
+    approvals_json: str = "[]"
+    status: str = Field(default="pending", index=True)  # pending | approved | rejected | applied
+    created_at: datetime = Field(default_factory=utcnow)
+    decided_at: datetime | None = None

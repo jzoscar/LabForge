@@ -20,6 +20,8 @@ ACTION_STYLE = {"create": ("+", "green"), "update": ("~", "yellow"), "delete": (
 STATUS_COLOR = {"up": "green", "degraded": "yellow", "down": "red", "unknown": "bright_black"}
 
 PathArg = typer.Argument(None, help="IaC file or directory (default: $LABFORGE_IAC_PATH or ./infra)")
+ServerOpt = typer.Option("http://127.0.0.1:8000", "--server", envvar="LABFORGE_SERVER")
+TokenOpt = typer.Option(None, "--token", envvar="LABFORGE_API_TOKEN")
 
 
 def _settings() -> Settings:
@@ -69,14 +71,85 @@ def validate(path: Path | None = PathArg) -> None:
 
 
 @app.command()
-def plan(path: Path | None = PathArg, all: bool = typer.Option(False, "--all", help="also show unchanged")) -> None:
-    """Show what apply would change."""
-    from labforge.iac.planner import build_plan
+def plan(path: Path | None = PathArg, all: bool = typer.Option(False, "--all", help="also show unchanged"),
+         format: str = typer.Option("text", "--format", help="text | markdown (for PR comments / CI summaries)"),
+         remote: str | None = typer.Option(None, "--remote", envvar="LABFORGE_REMOTE",
+                                           help="plan against a LabForge server's state (GitOps)"),
+         token: str | None = TokenOpt) -> None:
+    """Show what apply would change - locally, or against a remote LabForge's real state."""
+    from labforge.iac.planner import build_plan, plan_markdown
 
     settings = _settings()
-    docs = _load_or_exit(_path(path, settings))
+    p = _path(path, settings)
+    docs = _load_or_exit(p)
+    if remote:
+        files = _local_files(p)
+        r = _rig_request("POST", remote, "/iac/plan", token, json={"files": files})
+        if format == "markdown":
+            typer.echo(r["markdown"])
+        else:
+            for c in r["changes"]:
+                if c["action"] != "noop" or all:
+                    sym, color = ACTION_STYLE[c["action"]]
+                    typer.echo(typer.style(f"  {sym} {c['address']}", fg=color))
+            n = r["counts"]
+            typer.echo(f"\nPlan: {n['create']} to create, {n['update']} to update, {n['delete']} to delete, {n['noop']} unchanged.")
+        return
     with Session(make_engine(settings.db_url)) as s:
-        _print_plan(build_plan(docs, list(s.exec(select(ResourceState)))), show_noop=all)
+        result = build_plan(docs, list(s.exec(select(ResourceState))))
+    if format == "markdown":
+        typer.echo(plan_markdown(result))
+    else:
+        _print_plan(result, show_noop=all)
+
+
+def _local_files(path: Path) -> dict[str, str]:
+    from labforge.iac.loader import iac_files
+
+    root = path if path.is_dir() else path.parent
+    return {f.relative_to(root).as_posix(): f.read_text(encoding="utf-8") for f in iac_files(path)}
+
+
+@app.command()
+def sync(path: Path | None = PathArg,
+         remote: str = typer.Option(..., "--remote", envvar="LABFORGE_REMOTE", help="LabForge server URL"),
+         prune: bool = typer.Option(False, "--prune", help="delete server files that are not in PATH"),
+         apply_: bool = typer.Option(False, "--apply", help="apply after syncing and wait for the result"),
+         dry_run: bool = typer.Option(False, "--dry-run", help="with --apply: dry-run only"),
+         token: str | None = TokenOpt) -> None:
+    """GitOps: make a LabForge server's IaC workspace match PATH (a git checkout), then optionally apply."""
+    import time
+
+    local = _local_files(_path(path, _settings()))
+    remote_files = {f["path"]: f for f in _rig_request("GET", remote, "/iac/files", token)}
+    for rel, text in sorted(local.items()):
+        r = _rig_request("PUT", remote, f"/iac/files/{rel}", token, content=text.encode(),
+                         headers={"Content-Type": "text/plain"})
+        changed = rel not in remote_files or remote_files[rel]["digest"] != r["digest"]
+        typer.echo(f"{'~' if changed else '='} {rel}" + (f"  ({len(r['problems'])} problems)" if r["problems"] else ""))
+    for rel in sorted(set(remote_files) - set(local)):
+        if prune:
+            _rig_request("DELETE", remote, f"/iac/files/{rel}", token)
+            typer.echo(f"- {rel}")
+        else:
+            typer.secho(f"! {rel} exists only on the server (use --prune to delete it)", fg="yellow")
+    if not apply_:
+        return
+    run_id = _rig_request("POST", remote, "/iac/apply", token, json={"dry_run": dry_run})["runId"]
+    typer.echo(f"run #{run_id} started")
+    printed = 0
+    while True:
+        run = _rig_request("GET", remote, f"/runs/{run_id}", None)
+        lines = run["log"].splitlines()
+        for line in lines[printed:]:
+            typer.echo(line)
+        printed = len(lines)
+        if run["status"] != "running":
+            break
+        time.sleep(1)
+    if run["status"] != "success":
+        typer.secho(f"run #{run_id} {run['status']}", fg="red", err=True)
+        raise typer.Exit(1)
 
 
 def _run(path: Path, *, dry_run: bool, allow_prod: bool, yes: bool, destroy_envs: tuple[str, ...] = ()) -> None:
@@ -217,15 +290,13 @@ def sim_fault(device: str, fault: str = typer.Argument(..., help="crash | hang |
 
 rig_app = typer.Typer(help="Borrow devices from a rig pool (talks to a running LabForge server).", no_args_is_help=True)
 app.add_typer(rig_app, name="rig")
-ServerOpt = typer.Option("http://127.0.0.1:8000", "--server", envvar="LABFORGE_SERVER")
-TokenOpt = typer.Option(None, "--token", envvar="LABFORGE_API_TOKEN")
 
 
 def _rig_request(method: str, server: str, path: str, token: str | None, **kw):
     import httpx
 
-    r = httpx.request(method, f"{server.rstrip('/')}/api/v1{path}", timeout=120,
-                      headers={"X-LabForge-Token": token} if token else {}, **kw)
+    headers = {**({"X-LabForge-Token": token} if token else {}), **kw.pop("headers", {})}
+    r = httpx.request(method, f"{server.rstrip('/')}/api/v1{path}", timeout=120, headers=headers, **kw)
     if r.status_code >= 400:
         detail = r.json().get("detail", r.text) if "json" in r.headers.get("content-type", "") else r.text
         typer.secho(f"error {r.status_code}: {detail}", fg="red", err=True)
@@ -425,6 +496,47 @@ def token_revoke(name: str) -> None:
         raise typer.Exit(1) from e
     audit(engine, cli_actor(), "token.revoke", name, "", "cli")
     typer.echo(f"{name} revoked")
+
+
+cra_app = typer.Typer(help="EU CRA traceability: SBOMs per firmware, inventory, vulnerability impact.",
+                      no_args_is_help=True)
+app.add_typer(cra_app, name="cra")
+
+
+@cra_app.command("sbom")
+def cra_sbom(version: str, sbom: Path = typer.Argument(..., exists=True, dir_okay=False),
+             server: str = ServerOpt, token: str | None = TokenOpt) -> None:
+    """Upload the SBOM of a firmware version (e.g. BuildPulse's sbom.cdx.json)."""
+    import json
+
+    r = _rig_request("POST", server, f"/firmware/{version}/sbom", token, json=json.loads(sbom.read_text()))
+    typer.echo(f"{version}: {r['format']} SBOM with {r['components']} components")
+
+
+@cra_app.command("affected")
+def cra_affected(component: str, below: str | None = typer.Option(None, "--below", help="first fixed version"),
+                 versions: str | None = typer.Option(None, "--versions", help="comma-separated affected versions"),
+                 markdown: bool = typer.Option(False, "--markdown", help="print a report for the CRA notification"),
+                 server: str = ServerOpt) -> None:
+    """Which firmware contains a vulnerable component, and which devices run it now. Exit 1 if any."""
+    import httpx
+
+    params = {k: v for k, v in {"component": component, "below": below, "versions": versions}.items() if v}
+    if markdown:
+        typer.echo(httpx.get(f"{server.rstrip('/')}/api/v1/cra/affected", params={**params, "format": "markdown"},
+                             timeout=30).text)
+        return
+    r = _rig_request("GET", server, "/cra/affected", None, params=params)
+    for f in r["firmware"]:
+        typer.echo(f"firmware {f['firmware']}: contains {component} {', '.join(f['componentVersions'])}")
+    for d in r["devices"]:
+        typer.secho(f"  affected device {d['address']} ({d['env']}) runs {d['version']}", fg="red")
+    for d in r["unknown"]:
+        typer.secho(f"  no SBOM for {d['address']} running {d['version']}", fg="yellow")
+    if not r["firmware"]:
+        typer.secho("no firmware with an SBOM contains it", fg="green")
+    if r["devices"]:
+        raise typer.Exit(1)
 
 
 @app.command()

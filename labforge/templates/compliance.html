@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Compliance{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>CRA traceability</h1>
+  <span class="muted">What firmware runs where, what is inside it, and who a new CVE reaches</span>
+</div>
+
+<section class="stats">
+  <div class="stat"><div class="n">{{ inventory|length }}</div><div class="l">Devices with known firmware</div></div>
+  <div class="stat"><div class="n">{{ inventory|map(attribute='version')|unique|list|length }}</div><div class="l">Firmware versions in use</div></div>
+  <div class="stat"><div class="n">{{ sboms|length }}</div><div class="l">SBOMs</div></div>
+  <div class="stat {{ 's-up' if inventory and coverage == inventory|length else 's-degraded' }}"><div class="n">{{ coverage }}/{{ inventory|length }}</div><div class="l">Devices covered by an SBOM</div></div>
+</section>
+
+<section class="card">
+  <h2>Vulnerability impact</h2>
+  <form class="apply" method="get">
+    <input name="component" value="{{ q.component }}" placeholder="component, e.g. zlib" required>
+    <input name="below" value="{{ q.below }}" placeholder="fixed in (e.g. 1.3.1)">
+    <button>Who is affected?</button>
+  </form>
+  {% if result %}
+  <div class="grid2 tight">
+    <div>
+      <h3>Affected firmware</h3>
+      <ul class="outline">{% for f in result.firmware %}<li class="mono">{{ f.firmware }} <span class="sub">contains {{ q.component }} {{ f.componentVersions|join(', ') }}</span></li>{% else %}<li class="ok">No firmware with an SBOM contains it.</li>{% endfor %}</ul>
+      <h3>Devices running it now</h3>
+      <ul class="outline">{% for d in result.devices %}<li><a class="mono" href="/resources/{{ d.address }}">{{ d.address }}</a> <span class="sub">{{ d.version }}</span></li>{% else %}<li class="ok">None.</li>{% endfor %}</ul>
+      {% if result.unknown %}
+      <h3 class="err">Cannot be ruled out (no SBOM)</h3>
+      <ul class="outline">{% for d in result.unknown %}<li class="mono">{{ d.address }} <span class="sub">{{ d.version }}</span></li>{% endfor %}</ul>
+      {% endif %}
+    </div>
+    <div>
+      <h3>Report <span class="sub">(for the 24-hour early warning)</span></h3>
+      <pre>{{ report }}</pre>
+    </div>
+  </div>
+  {% endif %}
+</section>
+
+<div class="grid2">
+  <section class="card">
+    <h2>Firmware inventory</h2>
+    <table>
+      <thead><tr><th>Device</th><th>Firmware</th><th>sha256</th><th>Seen</th><th>SBOM</th></tr></thead>
+      <tbody>
+      {% for d in inventory %}
+      <tr><td><a class="mono" href="/resources/{{ d.address }}">{{ d.address }}</a></td><td class="mono">{{ d.version }}</td>
+        <td class="mono sub">{{ (d.sha256 or '')[:12] or '—' }}</td><td class="sub">{{ d.lastSeen|ago }} · {{ d.source }}</td>
+        <td>{% if d.sbom %}<span class="badge s-up">yes</span>{% else %}<span class="badge s-degraded">missing</span>{% endif %}</td></tr>
+      {% else %}
+      <tr><td colspan="5" class="muted">No firmware seen yet. Devices report it from their version endpoint, and every flash records it.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h2>SBOMs</h2>
+    <table>
+      <thead><tr><th>Firmware</th><th>Format</th><th>Components</th><th>Uploaded</th></tr></thead>
+      <tbody>
+      {% for s in sboms %}
+      <tr><td class="mono">{{ s.version }}</td><td>{{ s.format }}</td><td>{{ s.component_count }}</td><td class="sub">{{ s.uploaded_at|ago }}</td></tr>
+      {% else %}
+      <tr><td colspan="4" class="muted">Upload with <code>labforge cra sbom &lt;version&gt; sbom.cdx.json</code></td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+{% endblock %}

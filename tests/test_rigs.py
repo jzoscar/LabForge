@@ -205,3 +205,12 @@ def test_trends_and_queue_time(lab, engine):
     assert pool["results"] == {"failed": 0, "infra-failed": 1, "passed": 1} and pool["infraShare"] == 0.5
     assert pool["avgWaitSeconds"] == 42 and set(pool["utilisation"]) == {f"sim-sensor-0{i}" for i in (1, 2, 3, 4)}
     assert pool["heldSeconds"][a["device"]] > 0
+
+
+def test_monitoring_records_device_firmware_for_cra(lab, engine, settings):
+    from labforge.cra import inventory
+
+    asyncio.run(Monitor(engine, settings).sweep())
+    with Session(engine) as s:
+        inv = {d["address"]: d for d in inventory(s)}
+    assert inv["sim-lab.host.sim-sensor-01"]["version"] == "1.4.2" and inv["sim-lab.host.sim-sensor-01"]["source"] == "probe"

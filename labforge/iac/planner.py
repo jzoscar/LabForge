@@ -154,3 +154,24 @@ def build_plan(
             changes.append(Change("noop", addr, r.env, r.tier, r.kind, r.name, spec=r.spec, old_spec=st.spec,
                                   hash=r.hash))
     return Plan(changes=changes, envs=sorted(scope), desired=desired)
+
+
+SYMBOL = {"create": "+", "update": "~", "delete": "-", "noop": "="}
+
+
+def plan_markdown(plan: Plan, title: str = "LabForge plan") -> str:
+    """A plan as Markdown, for pull-request comments and CI job summaries."""
+    n = plan.counts()
+    lines = [f"### {title}", "",
+             f"**{n['create']}** to create, **{n['update']}** to update, **{n['delete']}** to delete, "
+             f"{n['noop']} unchanged · environments: {', '.join(plan.envs) or '-'}", ""]
+    changes = [c for c in plan.changes if c.action != "noop"]
+    if not changes:
+        return "\n".join(lines + ["No changes."]) + "\n"
+    prod = sorted({c.env for c in changes if c.tier == "prod"})
+    if prod:
+        lines += [f"> **Production:** changes {', '.join(prod)}; applying needs approval.", ""]
+    lines += ["| | Resource | Tier | Changed |", "|---|---|---|---|"]
+    lines += [f"| `{SYMBOL[c.action]}` | `{c.address}` | {c.tier} | {', '.join(f'`{d}`' for d in c.diff)} |"
+              for c in changes]
+    return "\n".join(lines) + "\n"

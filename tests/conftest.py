@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -27,7 +28,20 @@ class RecordingRunner(Runner):
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return Settings(db_url=f"sqlite:///{tmp_path / 'test.db'}", iac_path=ROOT / "examples" / "local",
+    # LABFORGE_TEST_DB_URL runs the suite on another database (e.g. PostgreSQL), schema rebuilt per test.
+    url = os.environ.get("LABFORGE_TEST_DB_URL")
+    if url:
+        from sqlmodel import SQLModel, create_engine
+
+        from sqlalchemy import text
+
+        fresh = create_engine(url)
+        with fresh.begin() as conn:  # sessions left by earlier tests would block DROP TABLE
+            conn.execute(text("SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                              "WHERE datname = current_database() AND pid <> pg_backend_pid()"))
+        SQLModel.metadata.drop_all(fresh)
+        fresh.dispose()
+    return Settings(db_url=url or f"sqlite:///{tmp_path / 'test.db'}", iac_path=ROOT / "examples" / "local",
                     data_dir=tmp_path / "data", monitor_enabled=False)
 
 

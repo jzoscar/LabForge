@@ -23,6 +23,7 @@ class ProbeResult:
     ok: bool | None  # None = unknown (probe could not run)
     latency_ms: float | None = None
     detail: str = ""
+    data: dict | None = None  # JSON body of an HTTP probe (e.g. a device's version endpoint)
 
 
 def _now() -> float:
@@ -90,7 +91,14 @@ async def http(url: str, timeout: float = 5.0, label: str | None = None) -> Prob
     except httpx.HTTPError as e:
         return ProbeResult(label, False, detail=f"{type(e).__name__}: {e}")
     latency = round((_now() - start) * 1000, 2)
-    return ProbeResult(label, r.status_code < 400, latency, f"HTTP {r.status_code}")
+    data = None
+    if "json" in r.headers.get("content-type", ""):
+        try:
+            body = r.json()
+            data = body if isinstance(body, dict) else None
+        except ValueError:
+            pass
+    return ProbeResult(label, r.status_code < 400, latency, f"HTTP {r.status_code}", data)
 
 
 async def redfish(bmc: Bmc, secrets: SecretResolver, desired_power: str | None, timeout: float = 10) -> ProbeResult:

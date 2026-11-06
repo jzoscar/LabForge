@@ -37,6 +37,8 @@ def _resource_json(st: ResourceState) -> dict:
 
 class PlanRequest(BaseModel):
     path: str | None = None
+    # GitOps: plan these files (path -> text, e.g. a pull request's IaC) against this server's state
+    files: dict[str, str] | None = None
 
 
 class ApplyRequest(PlanRequest):
@@ -116,11 +118,26 @@ def _iac_path(request: Request, path: str | None) -> Path:
 
 @router.post("/iac/plan", dependencies=[Depends(requires("viewer"))])
 def plan(req: PlanRequest, request: Request, session: Session = Depends(get_session)) -> dict:
+    import tempfile
+
+    from labforge.iac.planner import plan_markdown
+    from labforge.iac.workspace import Workspace, WorkspaceError
+
     try:
-        _, p = service.make_plan(session, _iac_path(request, req.path))
+        if req.files is not None:
+            with tempfile.TemporaryDirectory() as tmp:
+                ws = Workspace(Path(tmp), Path(tmp) / ".history")
+                for rel, text in req.files.items():
+                    ws.write(rel, text)
+                _, p = service.make_plan(session, ws.root)
+        else:
+            _, p = service.make_plan(session, _iac_path(request, req.path))
+    except WorkspaceError as e:
+        raise HTTPException(e.status, str(e)) from e
     except LoadError as e:
         raise HTTPException(422, {"errors": e.errors}) from e
     return {
+        "markdown": plan_markdown(p),
         "envs": p.envs,
         "counts": p.counts(),
         "changes": [{"action": c.action, "address": c.address, "tier": c.tier, "diff": c.diff}
@@ -526,3 +543,39 @@ def audit_log(action: str | None = None, actor: str | None = None, limit: int = 
     if actor:
         q = q.where(AuditEvent.actor == actor)
     return [e.model_dump() for e in session.exec(q)]
+
+
+# --- CRA: firmware inventory, SBOMs, vulnerability impact ----------------------------------
+
+
+@router.post("/firmware/{version}/sbom", status_code=201)
+def upload_sbom(version: str, request: Request, doc: dict = Body(...), session: Session = Depends(get_session),
+                who: Principal = Depends(requires("operator"))) -> dict:
+    """Attach the SBOM (CycloneDX or SPDX JSON) of a firmware version."""
+    from labforge.cra import store_sbom
+
+    try:
+        row = store_sbom(session, version, doc)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    audit(request.app.state.engine, who, "sbom.upload", version, f"{row.format}, {row.component_count} components", "api")
+    return {"version": version, "format": row.format, "components": row.component_count}
+
+
+@router.get("/cra/inventory")
+def cra_inventory(session: Session = Depends(get_session)) -> list[dict]:
+    from labforge.cra import inventory
+
+    return inventory(session)
+
+
+@router.get("/cra/affected")
+def cra_affected(component: str, below: str | None = None, versions: str | None = None, format: str = "json",
+                 session: Session = Depends(get_session)):
+    """Which firmware contains a vulnerable component, and which devices run it now (format=markdown for a report)."""
+    from labforge.cra import affected, report_markdown
+
+    result = affected(session, component, below=below, versions=versions.split(",") if versions else None)
+    if format == "markdown":
+        return Response(report_markdown(result), media_type="text/markdown")
+    return result

@@ -68,3 +68,28 @@ def test_additive_migration_adds_new_nullable_columns(tmp_path):
     make_engine(f"sqlite:///{db}")
     cols = {r[1] for r in sqlite3.connect(db).execute("PRAGMA table_info(lease)")}
     assert {"address", "note"} <= cols  # existing data untouched, nothing dropped
+
+
+def test_vault_backend_after_environment():
+    import httpx
+    import pytest
+
+    from labforge.iac.secrets import SecretError, SecretResolver, VaultClient
+
+    seen = []
+
+    def vault(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, request.headers["X-Vault-Token"]))
+        if request.url.path == "/v1/secret/data/labforge/bmc-default":
+            return httpx.Response(200, json={"data": {"data": {"value": "admin:vaulted"}}})
+        return httpx.Response(404, json={"errors": []})
+
+    client = VaultClient("https://vault.test", "s.tok", client=httpx.Client(transport=httpx.MockTransport(vault)))
+    r = SecretResolver(environ={"LABFORGE_SECRET_LOCAL": "from-env"}, vault=client)
+    assert r.get("local") == "from-env" and seen == []  # the environment wins, Vault not asked
+    assert r.credentials("bmc-default") == ("admin", "vaulted")
+    r.get("bmc-default")
+    assert seen == [("/v1/secret/data/labforge/bmc-default", "s.tok")]  # cached
+    with pytest.raises(SecretError, match="Vault secret/data/labforge/missing"):
+        r.get("missing")
+    assert VaultClient.from_env({"VAULT_ADDR": "https://v"}) is None  # no token, no Vault

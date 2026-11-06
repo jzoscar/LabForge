@@ -461,3 +461,43 @@ class AccessPolicyDoc(Model):
     kind: Literal["AccessPolicy"]
     metadata: Metadata
     spec: AccessPolicySpec = AccessPolicySpec()
+
+
+# --- release policy ---------------------------------------------------------------
+
+Weekday = Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+class ChangeWindow(Model):
+    """When production changes may be applied (UTC)."""
+
+    days: list[Weekday] = Field(min_length=1)
+    start: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    end: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$|^24:00$")
+
+
+class Gate(Model):
+    required_pools: list[str] = []  # each must have passed a device test of the exact version
+    require_sbom: bool = True  # CRA: no release without its SBOM
+
+
+class RolloutDefaults(Model):
+    env: str | None = None
+    selector: dict[str, str] = {}  # host labels, e.g. {role: station}
+    canary: int = Field(default=1, ge=1)
+    batch_size: int = Field(default=2, ge=1)
+    bake_seconds: int = Field(default=120, ge=0)
+
+
+class ReleasePolicySpec(Model):
+    gate: Gate = Gate()
+    rollout: RolloutDefaults = RolloutDefaults()
+    approvals: int = Field(default=1, ge=0)  # approvers (other than the requester) for production changes
+    change_windows: list[ChangeWindow] = []  # empty: any time
+
+
+class ReleasePolicyDoc(Model):
+    api_version: Literal["labforge/v1"]
+    kind: Literal["ReleasePolicy"]
+    metadata: Metadata
+    spec: ReleasePolicySpec = ReleasePolicySpec()

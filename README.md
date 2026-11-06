@@ -205,6 +205,57 @@ time, and queue time; plus **suggestions derived from those numbers**, for examp
 Build agents scale as code: a container with `replicas: N` runs `<name>-1 … <name>-N`; change N and
 apply, and LabForge starts the new agents or removes the extra ones (see the build-farm starter).
 
+## Security and access
+
+- **API tokens**: `labforge token create ci-rigs --role operator --envs "test-*,sim-lab"` prints a token
+  once (only its hash is stored); `token list`, `token revoke`. Roles: viewer < operator (rigs, alerts,
+  dry-runs, build ingest) < editor (IaC files) < admin (real applies, tokens). A token can only change
+  the environments it covers. `LABFORGE_API_TOKEN` is the master (admin) token. With no tokens at all
+  the API is open, for development
+- **Agent tokens** are bound to one host: `labforge token create arm-1 --role agent --subject dev.host.arm-node-01`
+- **Web UI and SSO**: put LabForge behind an SSO proxy (oauth2-proxy, Authentik… in front of your
+  OIDC or LDAP) and set `LABFORGE_AUTH_HEADER` (e.g. `X-Forwarded-Email`) and `LABFORGE_GROUPS_HEADER`.
+  An `AccessPolicy` document in the IaC workspace maps users and groups to roles and environments:
+
+  ```yaml
+  apiVersion: labforge/v1
+  kind: AccessPolicy
+  metadata: { name: lab-access }
+  spec:
+    bindings:
+      - { subjects: ["group:lab-admins"], role: admin }
+      - { subjects: ["group:firmware"], role: operator, envs: ["dev", "test-*", "sim-lab"] }
+  ```
+- **Audit log** (`/audit`, `GET /api/v1/audit`): applies, IaC edits, rig operations, alert handling, tokens
+- **Secrets**: `LABFORGE_SECRET_<REF>` first, then HashiCorp Vault when `VAULT_ADDR` / `VAULT_TOKEN` are set
+  (KV v2 at `secret/data/labforge/<ref>`, field `value`)
+
+## CRA traceability
+
+Every flash and every monitoring read of a device's version endpoint records which firmware runs where.
+Upload each release's SBOM (BuildPulse's `scan` writes CycloneDX and SPDX):
+
+```bash
+labforge cra sbom 1.5.0 .buildpulse/runs/<scan-run>/sbom.cdx.json
+labforge cra affected zlib --below 1.3.1              # exit 1 when devices are affected
+labforge cra affected zlib --below 1.3.1 --markdown   # report for the 24-hour early warning
+```
+
+The **Compliance** page shows the inventory, SBOM coverage, and the impact of a component version
+range, including devices whose firmware has no SBOM (they cannot be ruled out).
+
+## GitOps
+
+```bash
+labforge plan infra --remote https://labforge.lab --format markdown   # PR comment: plan against real state
+labforge sync infra --remote https://labforge.lab --prune --apply      # on merge: mirror git, apply, wait
+```
+
+[deploy/gitops/iac-pipeline.yml](deploy/gitops/iac-pipeline.yml) wires both into GitHub Actions on a
+self-hosted runner in the lab. Several LabForge instances can share one PostgreSQL database
+(`pip install 'labforge[postgres]'`, `LABFORGE_DB_URL=postgresql+psycopg://…`): one is elected to run
+monitoring and alerting, and applies and rig checkouts are serialized across them.
+
 ## Managing your lab
 
 `infra/` declares a complete set of R&D environments, one folder per tier. Each environment's size
@@ -371,6 +422,7 @@ boards; on Windows, rely on the BMC (Redfish) for temperatures.
 | `labforge/rigs.py` · `web_rigs.py` | Device test rigs: checkout, health check, self-healing, quarantine, release |
 | `labforge/alerting.py` · `notify.py` · `metrics.py` | Alert engine, channel adapters, Prometheus metrics |
 | `labforge/builds.py` · `web_builds.py` | Build-run ingestion, pipeline statistics, suggestions |
+| `labforge/auth.py` · `locks.py` · `cra.py` | Tokens, roles, SSO, audit; multi-instance locks; CRA traceability |
 | `labforge/sim.py` | Simulated ARM sensors with Redfish BMCs, a switched PDU, and fault injection |
 | `labforge/agent.py` | Host agent |
 
@@ -390,6 +442,9 @@ boards; on Windows, rely on the BMC (Redfish) for temperatures.
 | `LABFORGE_DATA_DIR` | `.labforge` | Generated files such as Terraform variable files |
 | `LABFORGE_PUBLIC_URL` | `http://127.0.0.1:8000` | Base URL used for links in notifications |
 | `LABFORGE_SLACK_SIGNING_SECRET` | none | Verifies Slack button clicks |
+| `LABFORGE_AUTH_HEADER` / `LABFORGE_GROUPS_HEADER` | none | SSO proxy headers for the web UI's user and groups |
+| `LABFORGE_SSO_DEFAULT_ROLE` | `viewer` | Role for signed-in users without a binding |
+| `VAULT_ADDR` / `VAULT_TOKEN` | none | Read secrets from Vault KV v2 (`LABFORGE_VAULT_MOUNT`, `LABFORGE_VAULT_PREFIX`) |
 
 ## Development
 
@@ -406,7 +461,7 @@ pytest
 | **M2 Device test rigs (on-device CI)** | ✅ Done (simulated rigs) | CI checks out a device, flashes it, runs on-device tests, then returns and restores it |
 | **M3 Alerting & on-call** | ✅ Done | Push problems to the right person via Slack / Teams / WhatsApp / SMS |
 | **M4 Build farm capacity & speed** | ✅ Done | Short queues, warm caches, build time that is measured and optimised |
-| **M5 Security, compliance & GitOps** | ⏳ Planned | Safe multi-user operation and CRA traceability |
+| **M5 Security, compliance & GitOps** | ✅ Done | Safe multi-user operation and CRA traceability |
 | **M6 Production release guardrails** | ⏳ Planned | Releases for customer production lines pass real devices first, then roll out in stages |
 
 ### M0 Platform foundation ✅
@@ -477,11 +532,12 @@ QEMU proves the ARM binary runs; it does not prove the product works on the devi
 
 ### M5 Security, compliance & GitOps
 
-- [ ] IaC lives in Bitbucket / GitHub: a pull request posts the plan as a comment; merging applies it
-- [ ] Single sign-on (OIDC / LDAP), per-environment RBAC, audit log
-- [ ] Per-agent tokens; secrets moved to a secrets manager such as Vault
-- [ ] **CRA traceability**: record the firmware version currently on each device and link it to that version's SBOM from BuildPulse, so when a new CVE is published the affected devices and versions are known immediately, supporting the 24-hour reporting process
-- [ ] PostgreSQL and multi-instance deployment
+- [x] IaC lives in Bitbucket / GitHub: a pull request posts the plan (against the lab's real state) as a comment; merging syncs and applies it (`labforge plan --remote`, `labforge sync --apply`, `deploy/gitops/`)
+- [x] Single sign-on through an SSO proxy (OIDC / LDAP behind oauth2-proxy or similar), per-environment RBAC from an `AccessPolicy`, audit log
+- [x] Per-agent tokens bound to their host; named, scoped, revocable API tokens; secrets from Vault (KV v2) after the environment
+- [x] **CRA traceability**: firmware inventory per device (from flashes and version endpoints), SBOM per firmware version, "which devices does this CVE reach" with a report for the 24-hour early warning
+- [x] PostgreSQL and multi-instance deployment: database lease locks elect one monitor leader and serialize applies and rig checkouts; the test suite runs on PostgreSQL (`LABFORGE_TEST_DB_URL`)
+- [ ] Wired to a real IdP and Vault *(needs your SSO and Vault; the protocols are covered by tests)*
 
 ### M6 Production release guardrails
 

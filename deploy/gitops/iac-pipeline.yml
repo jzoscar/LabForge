@@ -1,0 +1,40 @@
+# GitOps for a lab's IaC repository (copy to .github/workflows/ in the repo that holds infra/).
+# Runs on a self-hosted runner inside the lab network, because it talks to the lab's LabForge.
+# Secrets: LABFORGE_URL, LABFORGE_PLAN_TOKEN (viewer), LABFORGE_APPLY_TOKEN (admin, envs it may change).
+name: iac
+
+on:
+  pull_request:
+    paths: [ "infra/**" ]
+  push:
+    branches: [ main ]
+    paths: [ "infra/**" ]
+
+jobs:
+  plan:
+    if: github.event_name == 'pull_request'
+    runs-on: [ self-hosted, linux, lab ]
+    permissions: { pull-requests: write }
+    steps:
+      - uses: actions/checkout@v7
+      - run: pip install labforge
+      - name: Plan the pull request against the lab's real state
+        env:
+          LABFORGE_API_TOKEN: ${{ secrets.LABFORGE_PLAN_TOKEN }}
+        run: labforge plan infra --remote "${{ secrets.LABFORGE_URL }}" --format markdown > plan.md
+      - name: Comment the plan on the pull request
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: gh pr comment "${{ github.event.number }}" --body-file plan.md --edit-last || gh pr comment "${{ github.event.number }}" --body-file plan.md
+
+  apply:
+    if: github.event_name == 'push'
+    runs-on: [ self-hosted, linux, lab ]
+    environment: lab   # add required reviewers here for a manual gate
+    concurrency: lab-apply
+    steps:
+      - uses: actions/checkout@v7
+      - run: pip install labforge
+      - name: Sync the merged IaC to LabForge and apply it
+        env:
+          LABFORGE_API_TOKEN: ${{ secrets.LABFORGE_APPLY_TOKEN }}
+        run: labforge sync infra --remote "${{ secrets.LABFORGE_URL }}" --prune --apply

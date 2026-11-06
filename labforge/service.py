@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -66,10 +67,18 @@ def execute_run(
             s.add(run)
             s.commit()
 
+    from labforge import locks
+
     if not _apply_lock.acquire(blocking=False):
         _finish(engine, run_id, "failed", {"error": "another apply is running"})
         log("error: another apply is running")
         raise BusyError("another apply is running")
+    if not locks.acquire(engine, "apply", 3600):  # another LabForge instance is applying
+        _apply_lock.release()
+        who = locks.holder(engine, "apply") or "another instance"
+        _finish(engine, run_id, "failed", {"error": f"another apply is running on {who}"})
+        log(f"error: another apply is running on {who}")
+        raise BusyError(f"another apply is running on {who}")
     try:
         with Session(engine) as session:
             try:
@@ -95,7 +104,12 @@ def execute_run(
                 log(f"error: {e}")
                 _finish(engine, run_id, "failed", {"error": str(e)})
     finally:
-        _apply_lock.release()
+        try:
+            locks.release(engine, "apply")
+        except Exception:  # the lease expires on its own; never leak the in-process lock
+            logging.getLogger("labforge").exception("releasing the apply lock failed")
+        finally:
+            _apply_lock.release()
     with Session(engine) as s:
         run = s.get(Run, run_id)
         assert run

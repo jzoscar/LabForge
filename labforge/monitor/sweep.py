@@ -158,10 +158,19 @@ class Monitor:
     async def run_forever(self) -> None:
         while True:
             try:
-                await self.sweep()
+                await self.sweep_if_leader()
             except Exception:
                 log.exception("monitor sweep failed")
             await asyncio.sleep(self.settings.monitor_interval)
+
+    async def sweep_if_leader(self, owner: str | None = None) -> dict[str, str] | None:
+        """With several LabForge instances on one database, only the leader probes and alerts."""
+        from labforge.locks import INSTANCE, acquire
+
+        ttl = max(3 * self.settings.monitor_interval, 30)
+        if not await asyncio.to_thread(acquire, self.engine, "monitor", ttl, owner or INSTANCE):
+            return None
+        return await self.sweep()
 
     def _load(self) -> tuple[list[Target], dict[str, AgentReport]]:
         with Session(self.engine) as s:
@@ -222,6 +231,13 @@ class Monitor:
                 for stale in existing.values():
                     s.delete(stale)
 
+                if t.kind == "host":
+                    from labforge.cra import record_firmware
+
+                    for r in res:
+                        if r.data and isinstance(r.data.get("firmware"), str):
+                            record_firmware(s, t.address, r.data["firmware"], r.data.get("artifact_sha256"), "probe")
+                            break
                 status, detail = aggregate(res)
                 if status != st.status:
                     s.add(Event(address=t.address, old_status=st.status, new_status=status, detail=detail))
