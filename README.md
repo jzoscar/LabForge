@@ -187,6 +187,24 @@ rig devices, and rig pools running short of usable devices.
 latency, firing alerts, rig devices and lease results. Scrape config and a dashboard are in
 [deploy/grafana/](deploy/grafana/).
 
+## Build farm speed
+
+BuildPulse writes a `report.json` per run (stages, timings, cache state). Send them to LabForge after
+each build:
+
+```bash
+labforge builds ingest .buildpulse/runs --runner "$RUNNER_NAME" [--queued <seconds waited>]
+labforge builds stats
+```
+
+The **Builds** page (and `GET /api/v1/builds/stats`) shows, per pipeline: success rate, median and p90
+duration with a trend, where the time goes per stage, compiler cache hit rate, cold vs warm dependency
+time, and queue time; plus **suggestions derived from those numbers**, for example
+*"Dependencies take 23s cold vs 2.7s warm (9x). Share a Conan remote so every runner starts warm."*
+
+Build agents scale as code: a container with `replicas: N` runs `<name>-1 … <name>-N`; change N and
+apply, and LabForge starts the new agents or removes the extra ones (see the build-farm starter).
+
 ## Managing your lab
 
 `infra/` declares a complete set of R&D environments, one folder per tier. Each environment's size
@@ -352,6 +370,7 @@ boards; on Windows, rely on the BMC (Redfish) for temperatures.
 | `labforge/api.py` · `web.py` · `web_iac.py` · `templates/` | Backend API and web pages |
 | `labforge/rigs.py` · `web_rigs.py` | Device test rigs: checkout, health check, self-healing, quarantine, release |
 | `labforge/alerting.py` · `notify.py` · `metrics.py` | Alert engine, channel adapters, Prometheus metrics |
+| `labforge/builds.py` · `web_builds.py` | Build-run ingestion, pipeline statistics, suggestions |
 | `labforge/sim.py` | Simulated ARM sensors with Redfish BMCs, a switched PDU, and fault injection |
 | `labforge/agent.py` | Host agent |
 
@@ -386,7 +405,7 @@ pytest
 | **M1 Build & test lab onboarding** | 🚧 In progress | Device pools, build machines, runners and cache services all managed as code |
 | **M2 Device test rigs (on-device CI)** | ✅ Done (simulated rigs) | CI checks out a device, flashes it, runs on-device tests, then returns and restores it |
 | **M3 Alerting & on-call** | ✅ Done | Push problems to the right person via Slack / Teams / WhatsApp / SMS |
-| **M4 Build farm capacity & speed** | ⏳ Planned | Short queues, warm caches, build time that is measured and optimised |
+| **M4 Build farm capacity & speed** | ✅ Done | Short queues, warm caches, build time that is measured and optimised |
 | **M5 Security, compliance & GitOps** | ⏳ Planned | Safe multi-user operation and CRA traceability |
 | **M6 Production release guardrails** | ⏳ Planned | Releases for customer production lines pass real devices first, then roll out in stages |
 
@@ -449,10 +468,12 @@ QEMU proves the ARM binary runs; it does not prove the product works on the devi
 
 ### M4 Build farm capacity & speed
 
-- [ ] Build agents managed as IaC, scaling ephemeral Docker build agents on demand
-- [ ] Ingest BuildPulse `report.json` files to track per-stage timings, cache hit rates and queue times
-- [ ] Monitor capacity and hit rate of the remote cache services (Conan remote, sccache) so every runner starts warm
-- [ ] Surface the slowest pipelines and stages, with optimisation suggestions
+- [x] Build agents managed as IaC: `replicas` scales ephemeral Docker build agents up and down
+- [x] Ingest BuildPulse `report.json` files to track per-stage timings, cache hit rates and queue times
+- [x] Cache effectiveness from the build data: compiler cache hit rate, cold vs warm dependency time
+- [ ] Capacity of the remote cache services themselves (Conan remote / sccache storage) *(needs those services; their hosts' disk is already covered by the agent)*
+- [x] Surface the slowest pipelines and stages, with optimisation suggestions
+- [ ] Autoscaling on queue length *(today: queue time shows up and the suggestion says to raise `replicas`)*
 
 ### M5 Security, compliance & GitOps
 
