@@ -1,0 +1,13 @@
+{% macro badge(status) -%}
+<span class="badge s-{{ status }}">{{ STATUS_LABEL.get(status, status) }}</span>
+{%- endmacro %}
+
+{% macro platform(spec) -%}
+{% set p = spec.platform %}
+<span class="chip os-{{ p.os }}">{{ {'windows': 'Windows', 'linux': 'Linux', 'macos': 'macOS'}.get(p.os, p.os) }}</span>
+<span class="chip arch-{{ p.arch }}">{{ p.arch }}</span>
+{%- endmacro %}
+
+{% macro pct(v) -%}
+{% if v is none %}<span class="muted">—</span>{% else %}<span class="{{ 'hot' if v > 90 }}">{{ '%.0f' % v }}%</span>{% endif %}
+{%- endmacro %}

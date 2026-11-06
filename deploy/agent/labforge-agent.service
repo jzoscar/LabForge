@@ -1,0 +1,20 @@
+[Unit]
+Description=LabForge host agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Override with: systemctl edit labforge-agent
+Environment=LABFORGE_SERVER=http://labforge.lab:8000
+Environment=LABFORGE_ENV=dev
+Environment=LABFORGE_HOST=%H
+Environment=LABFORGE_AGENT_TOKEN=
+ExecStart=/usr/bin/python3 /opt/labforge/agent.py --interval 30
+Restart=always
+RestartSec=10
+DynamicUser=yes
+ReadOnlyPaths=/
+
+[Install]
+WantedBy=multi-user.target

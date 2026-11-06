@@ -1,0 +1,44 @@
+# 本机演示：无需任何真实硬件即可 apply，并看到真实的监控数据。
+#   LABFORGE_IAC_PATH=examples/local labforge apply -y
+#   labforge serve
+#   labforge agent --env demo --name this-mac --once
+apiVersion: labforge/v1
+kind: Environment
+metadata:
+  name: demo
+  tier: dev
+spec:
+  networks:
+    - name: loopback
+      type: physical
+      cidr: 127.0.0.0/8
+      subnets:
+        - { name: lo, cidr: 127.0.0.0/24, gateway: 127.0.0.1 }
+
+  hosts:
+    - name: this-mac
+      kind: baremetal
+      platform: { os: "${DEMO_OS:-macos}", arch: "${DEMO_ARCH:-arm64}" }
+      address: 127.0.0.1
+      subnet: loopback/lo
+      connection: { type: none }
+      monitor:
+        agent: true
+        probes: [ { type: ping }, { type: http, port: 8000, path: /api/v1/health } ]
+    - name: offline-board
+      kind: baremetal
+      platform: { os: linux, arch: arm64 }
+      address: 127.0.0.1
+      subnet: loopback/lo
+      connection: { type: none }
+      monitor:
+        probes: [ { type: tcp, port: 1 } ]   # nothing listens here -> shows as down
+      labels: { note: deliberately-unreachable }
+
+  loadBalancers:
+    - name: ui
+      network: loopback
+      vip: 127.0.0.1
+      listeners: [ { port: 8000, protocol: http } ]
+      targets: [ this-mac, offline-board ]
+      healthCheck: { protocol: tcp, port: 8000 }

@@ -1,0 +1,32 @@
+# 研发测试环境：ARM 板卡测试池，VPC 交给已有的 Terraform 模块管理
+apiVersion: labforge/v1
+kind: Environment
+metadata:
+  name: rnd
+  tier: rnd
+  description: 研发测试 - ARM 板卡池
+spec:
+  networks:
+    - name: rnd-net
+      type: physical
+      cidr: 10.30.0.0/16
+      subnets:
+        - { name: boards, cidr: 10.30.1.0/24, gateway: 10.30.1.1, vlan: 201 }
+
+  hosts:
+    - name: board-01
+      kind: baremetal
+      platform: { os: linux, arch: arm64 }
+      address: 10.30.1.21
+      subnet: rnd-net/boards
+      connection: { type: ssh, user: root }
+      monitor: { agent: true }
+      labels: { soc: rk3588 }
+    - name: board-02
+      kind: baremetal
+      platform: { os: linux, arch: armv7 }
+      address: 10.30.1.22
+      subnet: rnd-net/boards
+      connection: { type: ssh, user: root }
+      monitor: { agent: true }
+      labels: { soc: imx6 }

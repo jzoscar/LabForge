@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}执行 #{{ run.id }}{% endblock %}
+{% block content %}
+{% if run.status == 'running' %}<meta http-equiv="refresh" content="2">{% endif %}
+<div class="page-head">
+  <h1>执行 #{{ run.id }} <span class="badge r-{{ run.status }}">{{ run.status }}</span></h1>
+  <span class="muted">{{ 'dry-run' if run.dry_run else '真实执行' }} · {{ run.source }} · {{ run.started_at|ago }}</span>
+</div>
+<section class="card">
+  <h2>日志</h2>
+  <pre class="log">{{ run.log or '…' }}</pre>
+</section>
+{% endblock %}

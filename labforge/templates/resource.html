@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, platform, pct %}
+{% block title %}{{ st.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ st.name }} {{ badge(st.status) }}</h1>
+  <span class="mono muted">{{ st.address }}</span>
+</div>
+<p class="meta">
+  {{ KIND_LABEL.get(st.kind, st.kind) }} ·
+  <span class="chip tier-{{ st.tier }}">{{ TIER_LABEL.get(st.tier, st.tier) }}</span>
+  {% if st.kind == 'host' %}· {{ platform(st.spec) }} · {{ st.spec.kind }}{% endif %}
+  · 最近检查 {{ st.checked_at|ago }} · 最近变更 {{ st.updated_at|ago }}
+</p>
+{% if st.status_detail %}<p class="err">{{ st.status_detail }}</p>{% endif %}
+
+<div class="grid2">
+  <section class="card">
+    <h2>健康检查</h2>
+    <table>
+      <thead><tr><th>探针</th><th>结果</th><th>延迟</th><th>详情</th><th>时间</th></tr></thead>
+      <tbody>
+      {% for c in checks %}
+      <tr>
+        <td class="mono">{{ c.probe }}</td>
+        <td>{% if c.ok %}<span class="ok">✓</span>{% elif c.ok == false %}<span class="err">✗</span>{% else %}<span class="muted">?</span>{% endif %}</td>
+        <td class="sub">{{ '%.1f ms' % c.latency_ms if c.latency_ms is not none else '—' }}</td>
+        <td class="sub">{{ c.detail }}</td>
+        <td class="sub">{{ c.ts|ago }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="muted">尚未检查</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  {% if st.kind == 'host' %}
+  <section class="card">
+    <h2>Agent 指标</h2>
+    {% if latest %}
+    <table>
+      <tbody>
+        <tr><th>上报</th><td>{{ latest.ts|ago }} · {{ latest.payload.hostname }} · {{ latest.os }}/{{ latest.arch }}</td></tr>
+        <tr><th>系统</th><td class="sub">{{ latest.payload.extra.os_version }}</td></tr>
+        <tr><th>CPU</th><td>{{ pct(latest.cpu_percent) }} · {{ latest.payload.extra.cpu_count }} 核 · load {{ latest.payload.extra.load|join(' / ') if latest.payload.extra.load else '—' }}</td></tr>
+        {% for label, svg in spark.items() %}
+        <tr><th>{{ label }}</th><td>{{ svg }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">没有 Agent 上报。在该主机上运行：</p>
+    <pre>python agent.py --server http://&lt;labforge&gt;:8000 --env {{ st.env }} --name {{ st.name }} --token $LABFORGE_API_TOKEN</pre>
+    {% endif %}
+  </section>
+  {% endif %}
+</div>
+
+<div class="grid2">
+  <section class="card"><h2>IaC 声明</h2><pre>{{ spec_yaml }}</pre></section>
+  <section class="card"><h2>输出 (state)</h2><pre>{{ outputs_yaml }}</pre>
+    <h2>状态变化</h2>
+    <ul class="events">
+      {% for e in events %}<li><span class="sub">{{ e.ts|ago }}</span> {{ badge(e.old_status) }} → {{ badge(e.new_status) }} <span class="sub err">{{ e.detail|truncate(100) }}</span></li>{% else %}<li class="muted">暂无</li>{% endfor %}
+    </ul>
+  </section>
+</div>
+{% endblock %}

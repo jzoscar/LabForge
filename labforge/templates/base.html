@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}LabForge{% endblock %} · LabForge</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/">LabForge</a>
+  <nav>
+    <a href="/" class="{{ 'on' if nav == 'dash' }}">总览</a>
+    <a href="/resources" class="{{ 'on' if nav == 'res' }}">资源</a>
+    <a href="/iac" class="{{ 'on' if nav == 'iac' }}">IaC 计划</a>
+    <a href="/runs" class="{{ 'on' if nav == 'runs' }}">执行记录</a>
+    <a href="/docs">API</a>
+  </nav>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>
