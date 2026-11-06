@@ -1,10 +1,10 @@
-# 研发测试环境：ARM 板卡测试池，VPC 交给已有的 Terraform 模块管理
+# R&D test environment: a pool of ARM boards on a physical lab network
 apiVersion: labforge/v1
 kind: Environment
 metadata:
   name: rnd
   tier: rnd
-  description: 研发测试 - ARM 板卡池
+  description: R&D testing - ARM board pool
 spec:
   networks:
     - name: rnd-net

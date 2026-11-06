@@ -1,43 +1,43 @@
 {% extends "base.html" %}
-{% block title %}IaC 计划{% endblock %}
+{% block title %}IaC plan{% endblock %}
 {% block content %}
-<div class="page-head"><h1>IaC 计划</h1><span class="mono muted">{{ path }}</span></div>
+<div class="page-head"><h1>IaC plan</h1><span class="mono muted">{{ path }}</span></div>
 
 {% if errors %}
 <section class="card">
-  <h2 class="err">校验失败</h2>
+  <h2 class="err">Validation failed</h2>
   <ul class="errors">{% for e in errors %}<li class="mono">{{ e }}</li>{% endfor %}</ul>
 </section>
 {% elif plan %}
 {% set c = plan.counts() %}
 <section class="stats">
-  <div class="stat a-create"><div class="n">{{ c['create'] }}</div><div class="l">新增</div></div>
-  <div class="stat a-update"><div class="n">{{ c['update'] }}</div><div class="l">变更</div></div>
-  <div class="stat a-delete"><div class="n">{{ c['delete'] }}</div><div class="l">删除</div></div>
-  <div class="stat"><div class="n">{{ c['noop'] }}</div><div class="l">无变化</div></div>
+  <div class="stat a-create"><div class="n">{{ c['create'] }}</div><div class="l">Create</div></div>
+  <div class="stat a-update"><div class="n">{{ c['update'] }}</div><div class="l">Update</div></div>
+  <div class="stat a-delete"><div class="n">{{ c['delete'] }}</div><div class="l">Delete</div></div>
+  <div class="stat"><div class="n">{{ c['noop'] }}</div><div class="l">Unchanged</div></div>
 </section>
 
 <section class="card">
-  <h2>执行</h2>
+  <h2>Apply</h2>
   <form method="post" action="/iac/apply" class="apply">
-    <label><input type="checkbox" name="dry_run" value="true" checked {{ '' if ui_apply else 'disabled' }}> Dry-run（只打印将执行的命令，不写入状态）</label>
+    <label><input type="checkbox" name="dry_run" value="true" checked {{ '' if ui_apply else 'disabled' }}> Dry-run (print the commands that would run; write no state)</label>
     {% if not ui_apply %}<input type="hidden" name="dry_run" value="true">{% endif %}
-    <label><input type="checkbox" name="allow_prod" value="true"> 允许变更生产环境</label>
-    <button {{ 'disabled' if not plan.has_changes }}>执行</button>
+    <label><input type="checkbox" name="allow_prod" value="true"> Allow changes to production</label>
+    <button {{ 'disabled' if not plan.has_changes }}>Apply</button>
   </form>
   {% if not ui_apply %}
-  <p class="muted">网页端真实执行已禁用（设置 <code>LABFORGE_UI_APPLY=1</code> 开启）。真实执行请使用 CLI：<code>labforge apply {{ path }}</code></p>
+  <p class="muted">Real applies from the web UI are disabled (set <code>LABFORGE_UI_APPLY=1</code> to enable). To apply for real, use the CLI: <code>labforge apply {{ path }}</code></p>
   {% endif %}
 </section>
 
 <section class="card">
-  <h2>变更明细 <span class="muted">（按依赖顺序）</span></h2>
+  <h2>Changes <span class="muted">(in dependency order)</span></h2>
   <table>
-    <thead><tr><th>动作</th><th>资源</th><th>层级</th><th>变更字段</th></tr></thead>
+    <thead><tr><th>Action</th><th>Resource</th><th>Tier</th><th>Changed fields</th></tr></thead>
     <tbody>
     {% for ch in plan.changes %}
     <tr class="{{ 'dim' if ch.action == 'noop' }}">
-      <td><span class="act a-{{ ch.action }}">{{ {'create': '+ 新增', 'update': '~ 变更', 'delete': '- 删除', 'noop': '= 无变化'}[ch.action] }}</span></td>
+      <td><span class="act a-{{ ch.action }}">{{ {'create': '+ create', 'update': '~ update', 'delete': '- delete', 'noop': '= unchanged'}[ch.action] }}</span></td>
       <td class="mono">{{ ch.address }}</td>
       <td><span class="chip tier-{{ ch.tier }}">{{ TIER_LABEL.get(ch.tier, ch.tier) }}</span></td>
       <td class="mono sub">{{ ch.diff|join(', ') }}</td>

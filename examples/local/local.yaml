@@ -1,4 +1,4 @@
-# 本机演示：无需任何真实硬件即可 apply，并看到真实的监控数据。
+# Local demo: apply without any real hardware and still see real monitoring data.
 #   LABFORGE_IAC_PATH=examples/local labforge apply -y
 #   labforge serve
 #   labforge agent --env demo --name this-mac --once

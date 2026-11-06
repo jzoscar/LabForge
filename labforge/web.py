@@ -21,9 +21,9 @@ from labforge.models import AgentReport, CheckResult, Event, ResourceState, Run,
 router = APIRouter(include_in_schema=False)
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
-STATUS_LABEL = {"up": "正常", "degraded": "降级", "down": "故障", "unknown": "未知"}
-KIND_LABEL = {"network": "网络/VPC", "loadbalancer": "负载均衡", "host": "主机", "container": "容器"}
-TIER_LABEL = {"dev": "开发", "test": "测试", "rnd": "研发", "staging": "预发/非生产", "prod": "生产"}
+STATUS_LABEL = {"up": "Up", "degraded": "Degraded", "down": "Down", "unknown": "Unknown"}
+KIND_LABEL = {"network": "Network/VPC", "loadbalancer": "Load balancer", "host": "Host", "container": "Container"}
+TIER_LABEL = {"dev": "Dev", "test": "Test", "rnd": "R&D", "staging": "Staging", "prod": "Prod"}
 
 
 def ago(dt: datetime | None) -> str:
@@ -31,12 +31,12 @@ def ago(dt: datetime | None) -> str:
         return "—"
     s = int((utcnow() - dt).total_seconds())
     if s < 60:
-        return f"{max(s, 0)} 秒前"
+        return f"{max(s, 0)}s ago"
     if s < 3600:
-        return f"{s // 60} 分钟前"
+        return f"{s // 60}m ago"
     if s < 86400:
-        return f"{s // 3600} 小时前"
-    return f"{s // 86400} 天前"
+        return f"{s // 3600}h ago"
+    return f"{s // 86400}d ago"
 
 
 def sparkline(values: list[float | None], width: int = 140, height: int = 30, vmax: float = 100) -> Markup:
@@ -142,9 +142,9 @@ def resource_detail(address: str, request: Request, session: Session = Depends(g
     if reports:
         spark = {
             "CPU %": sparkline([r.cpu_percent for r in reports]),
-            "内存 %": sparkline([r.mem_percent for r in reports]),
-            "磁盘 %": sparkline([r.disk_percent for r in reports]),
-            "温度 °C": sparkline([r.temp_c for r in reports], vmax=110),
+            "Memory %": sparkline([r.mem_percent for r in reports]),
+            "Disk %": sparkline([r.disk_percent for r in reports]),
+            "Temp °C": sparkline([r.temp_c for r in reports], vmax=110),
         }
     return templates.TemplateResponse(request, "resource.html", {
         "nav": "res", "st": st, "checks": checks, "events": events,

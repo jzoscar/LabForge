@@ -60,7 +60,7 @@ def test_pages_render(client):
                 "/resources/demo.host.this-mac", "/resources/demo.loadbalancer.ui", "/iac", "/runs", "/runs/1"]:
         r = client.get(url)
         assert r.status_code == 200, url
-    assert "实体测试硬件" in client.get("/").text
+    assert "Physical test hardware" in client.get("/").text
     for url in ["/iac", "/runs"]:
         assert "built-in method" not in client.get(url).text, url
 

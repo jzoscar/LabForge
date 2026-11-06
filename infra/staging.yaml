@@ -1,4 +1,4 @@
-# 非生产（预发）环境：云上 VPC + 托管负载均衡，交给 Terraform 模块
+# Pre-production (staging) environment: cloud VPC + managed load balancer, delegated to Terraform modules
 apiVersion: labforge/v1
 kind: Environment
 metadata:

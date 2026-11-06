@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}总览{% endblock %}
+{% block title %}Overview{% endblock %}
 {% block content %}
 <div class="page-head">
-  <h1>环境总览</h1>
-  <span class="muted">每 15 秒自动刷新</span>
+  <h1>Environment overview</h1>
+  <span class="muted">Refreshes every 15 s</span>
 </div>
 <div id="dash" hx-get="/partials/dashboard" hx-trigger="every 15s" hx-swap="innerHTML">
   {% include "_dashboard_body.html" %}

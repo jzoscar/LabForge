@@ -1,18 +1,18 @@
 {% extends "base.html" %}
 {% from "_macros.html" import badge %}
-{% block title %}资源{% endblock %}
+{% block title %}Resources{% endblock %}
 {% block content %}
-<div class="page-head"><h1>资源</h1><span class="muted">{{ rows|length }} 项</span></div>
+<div class="page-head"><h1>Resources</h1><span class="muted">{{ rows|length }} item(s)</span></div>
 <form class="filters" method="get">
-  <input name="q" value="{{ f.q }}" placeholder="按地址搜索">
-  <select name="env"><option value="">全部环境</option>{% for e in envs %}<option {{ 'selected' if f.env == e }}>{{ e }}</option>{% endfor %}</select>
-  <select name="kind"><option value="">全部类型</option>{% for k, l in KIND_LABEL.items() %}<option value="{{ k }}" {{ 'selected' if f.kind == k }}>{{ l }}</option>{% endfor %}</select>
-  <select name="status"><option value="">全部状态</option>{% for k, l in STATUS_LABEL.items() %}<option value="{{ k }}" {{ 'selected' if f.status == k }}>{{ l }}</option>{% endfor %}</select>
-  <button>筛选</button>
+  <input name="q" value="{{ f.q }}" placeholder="Search by address">
+  <select name="env"><option value="">All environments</option>{% for e in envs %}<option {{ 'selected' if f.env == e }}>{{ e }}</option>{% endfor %}</select>
+  <select name="kind"><option value="">All types</option>{% for k, l in KIND_LABEL.items() %}<option value="{{ k }}" {{ 'selected' if f.kind == k }}>{{ l }}</option>{% endfor %}</select>
+  <select name="status"><option value="">All statuses</option>{% for k, l in STATUS_LABEL.items() %}<option value="{{ k }}" {{ 'selected' if f.status == k }}>{{ l }}</option>{% endfor %}</select>
+  <button>Filter</button>
 </form>
 <section class="card">
 <table>
-  <thead><tr><th>地址</th><th>类型</th><th>层级</th><th>状态</th><th>最近检查</th><th>最近变更</th></tr></thead>
+  <thead><tr><th>Address</th><th>Type</th><th>Tier</th><th>Status</th><th>Last checked</th><th>Last changed</th></tr></thead>
   <tbody>
   {% for r in rows %}
   <tr>
@@ -24,7 +24,7 @@
     <td class="sub">{{ r.updated_at|ago }}</td>
   </tr>
   {% else %}
-  <tr><td colspan="6" class="muted">没有匹配的资源</td></tr>
+  <tr><td colspan="6" class="muted">No matching resources</td></tr>
   {% endfor %}
   </tbody>
 </table>

@@ -1,5 +1,5 @@
-# 开发环境：ARM 实体测试板 + Windows 构建机 + Linux 服务器 + 容器 + VPC + 负载均衡
-# 密钥从不写在这里：xxxRef 指向环境变量 LABFORGE_SECRET_<NAME>
+# Development environment: physical ARM test boards + Windows machines + Linux server + containers + VPC + load balancer
+# Secrets never live here: each xxxRef points to the environment variable LABFORGE_SECRET_<NAME>
 #   LABFORGE_SECRET_BMC_DEFAULT="admin:password"
 #   LABFORGE_SECRET_LAB_SSH_KEY="/home/ops/.ssh/lab_ed25519"
 #   LABFORGE_SECRET_WIN_ADMIN="..."
@@ -8,20 +8,20 @@ kind: Environment
 metadata:
   name: dev
   tier: dev
-  description: 开发联调环境
+  description: Development integration environment
 spec:
   networks:
     - name: lab-vpc
       type: vpc
       cidr: 10.20.0.0/16
       subnets:
-        - { name: mgmt, cidr: 10.20.0.0/24, gateway: 10.20.0.1, vlan: 100 }   # BMC / 带外管理
-        - { name: arm,  cidr: 10.20.1.0/24, gateway: 10.20.1.1, vlan: 101 }   # ARM 测试板
-        - { name: win,  cidr: 10.20.2.0/24, gateway: 10.20.2.1, vlan: 102 }   # Windows 测试机
-        - { name: svc,  cidr: 10.20.3.0/24, gateway: 10.20.3.1, vlan: 103 }   # 服务器 / 容器
+        - { name: mgmt, cidr: 10.20.0.0/24, gateway: 10.20.0.1, vlan: 100 }   # BMC / out-of-band management
+        - { name: arm,  cidr: 10.20.1.0/24, gateway: 10.20.1.1, vlan: 101 }   # ARM test boards
+        - { name: win,  cidr: 10.20.2.0/24, gateway: 10.20.2.1, vlan: 102 }   # Windows test machines
+        - { name: svc,  cidr: 10.20.3.0/24, gateway: 10.20.3.1, vlan: 103 }   # servers / containers
 
   hosts:
-    # --- ARM 实体测试硬件（带 Redfish BMC，可远程开关机） ---
+    # --- Physical ARM test hardware (Redfish/IPMI BMC, remote power control) ---
     - name: arm-node-01
       kind: baremetal
       platform: { os: linux, arch: arm64, distro: ubuntu, version: "24.04" }
@@ -51,7 +51,7 @@ spec:
         probes: [ { type: ping }, { type: tcp, port: 22 } ]
       labels: { board: rk3588, rack: r1-u14 }
 
-    # --- Windows 实体测试机 ---
+    # --- Physical Windows test machine ---
     - name: win-test-01
       kind: baremetal
       platform: { os: windows, arch: amd64, version: "11-23H2" }
@@ -78,7 +78,7 @@ spec:
         probes: [ { type: ping }, { type: tcp, port: 5985 } ]
       labels: { device: snapdragon-x-devkit }
 
-    # --- Linux 服务器（承载容器 + haproxy） ---
+    # --- Linux server (runs containers + haproxy) ---
     - name: svc-01
       kind: vm
       platform: { os: linux, arch: amd64, distro: rocky, version: "9" }

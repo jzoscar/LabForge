@@ -1,23 +1,23 @@
 {% extends "base.html" %}
-{% block title %}执行记录{% endblock %}
+{% block title %}Runs{% endblock %}
 {% block content %}
-<div class="page-head"><h1>执行记录</h1></div>
+<div class="page-head"><h1>Runs</h1></div>
 <section class="card">
 <table>
-  <thead><tr><th>#</th><th>动作</th><th>来源</th><th>模式</th><th>结果</th><th>摘要</th><th>开始</th></tr></thead>
+  <thead><tr><th>#</th><th>Action</th><th>Source</th><th>Mode</th><th>Result</th><th>Summary</th><th>Started</th></tr></thead>
   <tbody>
   {% for r in rows %}
   <tr>
     <td><a href="/runs/{{ r.id }}">#{{ r.id }}</a></td>
     <td>{{ r.action }}</td>
     <td class="mono sub">{{ r.source }}</td>
-    <td>{{ 'dry-run' if r.dry_run else '真实执行' }}</td>
+    <td>{{ 'dry-run' if r.dry_run else 'real' }}</td>
     <td><span class="badge r-{{ r.status }}">{{ r.status }}</span></td>
     <td class="mono sub">{% set s = r.summary %}{% if s.applied %}+{{ s.applied['create'] }} ~{{ s.applied['update'] }} -{{ s.applied['delete'] }}{% elif s.error %}{{ s.error|truncate(60) }}{% endif %}</td>
     <td class="sub">{{ r.started_at|ago }}</td>
   </tr>
   {% else %}
-  <tr><td colspan="7" class="muted">暂无</td></tr>
+  <tr><td colspan="7" class="muted">No runs yet</td></tr>
   {% endfor %}
   </tbody>
 </table>
