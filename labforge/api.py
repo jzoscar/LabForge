@@ -319,3 +319,100 @@ def rig_unquarantine(address: str, request: Request) -> Response:
 
     _rig_call(lambda: rigs.unquarantine(request.app.state.engine, address))
     return Response(status_code=204)
+
+
+# --- alerts ---------------------------------------------------------------------
+
+
+class SilenceRequest(BaseModel):
+    matcher: str  # glob on the alert subject, e.g. "staging.*" or "pool:sim-sensor"
+    minutes: int = 60
+    reason: str = ""
+    created_by: str = ""
+
+
+@router.get("/alerts")
+def list_alerts(status: str | None = "firing", limit: int = 200, session: Session = Depends(get_session)) -> list[dict]:
+    from labforge.models import Alert
+
+    q = select(Alert).order_by(Alert.started_at.desc()).limit(min(limit, 1000))
+    if status:
+        q = q.where(Alert.status == status)
+    return [a.model_dump() for a in session.exec(q)]
+
+
+@router.post("/alerts/{alert_id}/ack", dependencies=[Depends(require_token)])
+def ack_alert(alert_id: int, who: str = "", session: Session = Depends(get_session)) -> dict:
+    from labforge.alerting import acknowledge
+
+    try:
+        return acknowledge(session, alert_id, who or "api").model_dump()
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+
+
+@router.post("/silences", dependencies=[Depends(require_token)], status_code=201)
+def create_silence(req: SilenceRequest, session: Session = Depends(get_session)) -> dict:
+    from labforge.alerting import silence
+
+    return silence(session, req.matcher, req.minutes, req.reason, req.created_by or "api").model_dump()
+
+
+@router.delete("/silences/{silence_id}", dependencies=[Depends(require_token)], status_code=204)
+def delete_silence(silence_id: int, session: Session = Depends(get_session)) -> Response:
+    from labforge.models import Silence
+
+    row = session.get(Silence, silence_id)
+    if row:
+        session.delete(row)
+        session.commit()
+    return Response(status_code=204)
+
+
+@router.get("/reports/availability")
+def availability_report(days: int = 7, session: Session = Depends(get_session)) -> list[dict]:
+    from labforge.alerting import availability
+
+    return availability(session, min(max(days, 1), 90))
+
+
+@router.post("/alerts/slack/actions", include_in_schema=False)
+async def slack_actions(request: Request, session: Session = Depends(get_session)) -> dict:
+    """Slack interactivity endpoint: Acknowledge / Silence 1h / Back to pool buttons on alerts.
+    Requests are verified with the Slack app's signing secret (LABFORGE_SLACK_SIGNING_SECRET)."""
+    import json
+    import time as _time
+    from urllib.parse import parse_qs
+
+    from labforge.alerting import acknowledge, silence
+    from labforge.models import Alert
+
+    secret = request.app.state.settings.slack_signing_secret
+    body = await request.body()
+    ts = request.headers.get("X-Slack-Request-Timestamp", "0")
+    expected = "v0=" + hmac.new((secret or "").encode(), f"v0:{ts}:".encode() + body, "sha256").hexdigest()
+    if not secret or not ts.isdigit() or abs(_time.time() - int(ts)) > 300 \
+            or not hmac.compare_digest(expected, request.headers.get("X-Slack-Signature", "")):
+        raise HTTPException(401, "invalid Slack signature")
+
+    payload = json.loads(parse_qs(body.decode()).get("payload", ["{}"])[0])
+    action = (payload.get("actions") or [{}])[0]
+    user = (payload.get("user") or {}).get("username") or (payload.get("user") or {}).get("id", "slack")
+    alert = session.get(Alert, int(action.get("value") or 0))
+    if not alert:
+        return {"text": "That alert no longer exists."}
+    if action.get("action_id") == "ack":
+        acknowledge(session, alert.id, f"slack:{user}")
+        return {"text": f"{alert.subject} acknowledged by {user}"}
+    if action.get("action_id") == "silence_1h":
+        silence(session, alert.subject, 60, f"silenced from Slack by {user}", f"slack:{user}")
+        return {"text": f"{alert.subject} silenced for 1 hour by {user}"}
+    if action.get("action_id") == "unquarantine":
+        from labforge import rigs
+
+        try:
+            rigs.unquarantine(request.app.state.engine, alert.subject)
+        except rigs.RigError as e:
+            return {"text": e.detail["error"]}
+        return {"text": f"{alert.subject} returned to its pool by {user}"}
+    return {"text": "Unknown action"}

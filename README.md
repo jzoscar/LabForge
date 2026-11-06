@@ -163,6 +163,30 @@ on-device-tests:
       run: labforge rig release "$LABFORGE_LEASE_ID" --result ${{ steps.test.outcome == 'success' && 'passed' || 'failed' }}
 ```
 
+## Alerting
+
+An `AlertPolicy` document in the IaC workspace ([infra/alerting.yaml](infra/alerting.yaml)) declares
+notification channels and routes. Alerts come from monitoring (resource down / degraded), quarantined
+rig devices, and rig pools running short of usable devices.
+
+- **Channels**: Slack (with Acknowledge / Silence 1h / Back to pool buttons), Microsoft Teams,
+  WhatsApp (Meta Cloud API or Twilio), SMS (Twilio), PagerDuty, Opsgenie, e-mail and generic webhooks.
+  Webhook URLs and tokens are secret refs, like everything else
+- **Routes** match on env, tier, kind, severity and labels; first match wins unless `continue: true`
+- One alert per condition, **one message per channel per sweep** (no alert storms), repeated after
+  `repeatAfterMinutes` until acknowledged, a **recovery notice** when it clears, PagerDuty / Opsgenie
+  alerts deduplicated and resolved by key
+- **Silences** (glob on the subject, e.g. `staging.*`) mute notifications without hiding alerts
+- The **Alerts** page shows what is firing, channels (with a *Send test* button), routes, silences,
+  what was sent, and 7-day availability per resource (`GET /api/v1/reports/availability`)
+- Slack buttons: create a Slack app, set its interactivity URL to
+  `<LABFORGE_PUBLIC_URL>/api/v1/alerts/slack/actions` and `LABFORGE_SLACK_SIGNING_SECRET` to its
+  signing secret; requests are verified before anything changes
+
+**Prometheus / Grafana**: `GET /metrics` exposes resource status, agent metrics, probe results and
+latency, firing alerts, rig devices and lease results. Scrape config and a dashboard are in
+[deploy/grafana/](deploy/grafana/).
+
 ## Managing your lab
 
 `infra/` declares a complete set of R&D environments, one folder per tier. Each environment's size
@@ -327,6 +351,7 @@ boards; on Windows, rely on the BMC (Redfish) for temperatures.
 | `labforge/monitor/` | Async probes, health sweeps, status aggregation |
 | `labforge/api.py` · `web.py` · `web_iac.py` · `templates/` | Backend API and web pages |
 | `labforge/rigs.py` · `web_rigs.py` | Device test rigs: checkout, health check, self-healing, quarantine, release |
+| `labforge/alerting.py` · `notify.py` · `metrics.py` | Alert engine, channel adapters, Prometheus metrics |
 | `labforge/sim.py` | Simulated ARM sensors with Redfish BMCs, a switched PDU, and fault injection |
 | `labforge/agent.py` | Host agent |
 
@@ -344,6 +369,8 @@ boards; on Windows, rely on the BMC (Redfish) for temperatures.
 | `LABFORGE_UI_APPLY` | `false` | Allow real applies from the web UI |
 | `LABFORGE_UI_EDIT` | `true` | Allow editing, importing and deleting IaC files from the web UI |
 | `LABFORGE_DATA_DIR` | `.labforge` | Generated files such as Terraform variable files |
+| `LABFORGE_PUBLIC_URL` | `http://127.0.0.1:8000` | Base URL used for links in notifications |
+| `LABFORGE_SLACK_SIGNING_SECRET` | none | Verifies Slack button clicks |
 
 ## Development
 
@@ -358,7 +385,7 @@ pytest
 | **M0 Platform foundation** | ✅ Done (v0.1.0) | IaC, plan/apply, drivers, monitoring, agent, web console, IaC workspace |
 | **M1 Build & test lab onboarding** | 🚧 In progress | Device pools, build machines, runners and cache services all managed as code |
 | **M2 Device test rigs (on-device CI)** | ✅ Done (simulated rigs) | CI checks out a device, flashes it, runs on-device tests, then returns and restores it |
-| **M3 Alerting & on-call** | ⏳ Planned | Push problems to the right person via Slack / Teams / WhatsApp / SMS |
+| **M3 Alerting & on-call** | ✅ Done | Push problems to the right person via Slack / Teams / WhatsApp / SMS |
 | **M4 Build farm capacity & speed** | ⏳ Planned | Short queues, warm caches, build time that is measured and optimised |
 | **M5 Security, compliance & GitOps** | ⏳ Planned | Safe multi-user operation and CRA traceability |
 | **M6 Production release guardrails** | ⏳ Planned | Releases for customer production lines pass real devices first, then roll out in stages |
@@ -409,15 +436,16 @@ QEMU proves the ARM binary runs; it does not prove the product works on the devi
 
 ### M3 Alerting & on-call
 
-- [ ] Notification channels (pluggable, one adapter per channel):
+- [x] Notification channels (pluggable, one adapter per channel):
   - **Slack** (primary): actionable buttons to acknowledge, silence or quarantine a device; messages link to the run and include a failure summary
   - **Microsoft Teams**: Incoming Webhooks / Workflows
   - **WhatsApp**: Meta WhatsApp Cloud API or Twilio, for after-hours on-call
   - **SMS**: Twilio as the last-resort fallback (iMessage has no public sending API, so SMS covers phones)
   - **PagerDuty / Opsgenie**: on-call rotations and escalation; plus email and generic webhooks
-- [ ] Routing rules by environment tier (dev / test / staging / demo / prod) and severity, e.g. build machine disk full → Slack channel; device pool availability below threshold → on-call engineer via WhatsApp
-- [ ] Deduplication, grouping, silence windows and recovery notifications to prevent alert storms
-- [ ] Prometheus metrics at `/metrics` with Grafana dashboards; historical trends and availability reports
+- [x] Routing rules by environment tier (dev / test / staging / demo / prod) and severity, e.g. build machine disk full → Slack channel; device pool availability below threshold → on-call engineer via WhatsApp
+- [x] Deduplication, grouping, silence windows and recovery notifications to prevent alert storms
+- [x] Prometheus metrics at `/metrics` with a Grafana dashboard; availability reports
+- [ ] Verified against live Slack / Teams / WhatsApp / Twilio / PagerDuty accounts *(payloads are tested against each provider's documented API; needs real credentials)*
 
 ### M4 Build farm capacity & speed
 

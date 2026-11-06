@@ -55,8 +55,13 @@ def _print_plan(plan: Plan, show_noop: bool = False) -> None:
 @app.command()
 def validate(path: Path | None = PathArg) -> None:
     """Validate IaC files (schema + cross references)."""
+    from labforge.iac.loader import load_policies
+
     p = _path(path, _settings())
     docs = _load_or_exit(p)
+    for policy in load_policies(p):
+        s = policy.spec
+        typer.secho(f"✓ alert policy {policy.metadata.name}: {len(s.channels)} channels, {len(s.routes)} routes", fg="green")
     for d in docs:
         s = d.spec
         typer.secho(f"✓ {d.metadata.name} [{d.metadata.tier}]: {len(s.networks)} networks, "

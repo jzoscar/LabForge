@@ -72,6 +72,9 @@ tr.dim td { opacity: .55; }
 .s-down.badge, .r-failed { background: var(--err-bg); color: var(--err); }
 .s-unknown.badge { background: var(--unk-bg); color: var(--unk); }
 .s-quarantined.badge, .rig-quarantined, .res-failed, .res-infra-failed { background: var(--err-bg); color: var(--err); }
+.sev-critical { background: var(--err-bg); color: var(--err); }
+.sev-warning { background: var(--warn-bg); color: var(--warn); }
+.sev-info { background: var(--unk-bg); color: var(--accent); }
 .rig-free, .res-passed { background: var(--ok-bg); color: var(--ok); }
 .rig-leased, .rig-active { background: var(--warn-bg); color: var(--warn); }
 .util { display: grid; grid-template-columns: 110px 1fr 48px; gap: 6px; align-items: center; }

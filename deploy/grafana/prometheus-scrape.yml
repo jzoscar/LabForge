@@ -1,0 +1,6 @@
+# Add to prometheus.yml; then import deploy/grafana/labforge-dashboard.json into Grafana.
+scrape_configs:
+  - job_name: labforge
+    scrape_interval: 30s
+    static_configs:
+      - targets: [ "labforge.lab:8000" ]   # serves /metrics

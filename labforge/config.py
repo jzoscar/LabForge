@@ -32,6 +32,10 @@ class Settings:
     ui_apply: bool = False
     # Editing, importing and deleting IaC files from the web UI.
     ui_edit: bool = True
+    # Base URL people reach LabForge on; used for links in notifications.
+    public_url: str = "http://127.0.0.1:8000"
+    # Verifies Slack button clicks (Slack app "Signing Secret").
+    slack_signing_secret: str | None = None
 
     def workspace(self) -> Workspace:
         from labforge.iac.workspace import Workspace
@@ -53,4 +57,6 @@ class Settings:
             retention_hours=int(os.getenv("LABFORGE_RETENTION_HOURS", cls.retention_hours)),
             ui_apply=_bool("LABFORGE_UI_APPLY", cls.ui_apply),
             ui_edit=_bool("LABFORGE_UI_EDIT", cls.ui_edit),
+            public_url=os.getenv("LABFORGE_PUBLIC_URL", cls.public_url).rstrip("/"),
+            slack_signing_secret=os.getenv("LABFORGE_SLACK_SIGNING_SECRET") or None,
         )

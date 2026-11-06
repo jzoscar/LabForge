@@ -15,7 +15,7 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
-from labforge.iac.spec import EnvironmentDoc
+from labforge.iac.spec import AlertPolicyDoc, EnvironmentDoc
 
 _VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 # Cross-reference errors name the offending resource: "host arm1: unknown subnet ..."
@@ -102,9 +102,19 @@ def _messages(err: dict) -> list[str]:
     return [m for m in msg.split("; ") if m] if err["type"] == "value_error" else [msg]
 
 
+KINDS = {"Environment": EnvironmentDoc, "AlertPolicy": AlertPolicyDoc}
+
+
 def parse_text(text: str, source: str = "<buffer>",
                environ: Mapping[str, str] | None = None) -> tuple[list[EnvironmentDoc], list[Diagnostic]]:
-    """Parse one YAML file's text into environment documents plus diagnostics."""
+    """Parse one YAML file's text into environment documents plus diagnostics (all kinds are validated)."""
+    docs, diags = parse_documents(text, source, environ)
+    return [d for d in docs if isinstance(d, EnvironmentDoc)], diags
+
+
+def parse_documents(text: str, source: str = "<buffer>", environ: Mapping[str, str] | None = None
+                    ) -> tuple[list[EnvironmentDoc | AlertPolicyDoc], list[Diagnostic]]:
+    """Parse one YAML file into documents of every kind (Environment, AlertPolicy)."""
     environ = os.environ if environ is None else environ
     text, missing = interpolate(text, environ)
     diags: list[Diagnostic] = []
@@ -119,13 +129,19 @@ def parse_text(text: str, source: str = "<buffer>",
         problem = getattr(e, "problem", None) or str(e)
         return [], diags + [Diagnostic(source, mark.line + 1 if mark else None, f"invalid YAML: {problem}")]
 
-    docs: list[EnvironmentDoc] = []
+    docs: list[EnvironmentDoc | AlertPolicyDoc] = []
     for node, raw in zip(nodes, raws):
         if raw is None or node is None:
             continue
+        model = KINDS.get(raw.get("kind")) if isinstance(raw, dict) else None
+        if model is None:
+            diags.append(Diagnostic(source, node.start_mark.line + 1,
+                                    f"kind: expected one of {', '.join(KINDS)}, got {raw.get('kind') if isinstance(raw, dict) else raw!r}"))
+            continue
         try:
-            doc = EnvironmentDoc.model_validate(raw)
-            doc._source = source
+            doc = model.model_validate(raw)
+            if isinstance(doc, EnvironmentDoc):
+                doc._source = source
             docs.append(doc)
         except ValidationError as e:
             for err in e.errors():
@@ -162,3 +178,13 @@ def load_path(path: str | Path, environ: Mapping[str, str] | None = None) -> lis
     if diags:
         raise LoadError(diags)
     return docs
+
+
+def load_policies(path: str | Path, environ: Mapping[str, str] | None = None) -> list[AlertPolicyDoc]:
+    """AlertPolicy documents in a workspace; invalid files are skipped (they show up as problems)."""
+    path = Path(path)
+    out: list[AlertPolicyDoc] = []
+    for f in iac_files(path) if path.exists() else []:
+        docs, _ = parse_documents(f.read_text(encoding="utf-8"), str(f), environ)
+        out += [d for d in docs if isinstance(d, AlertPolicyDoc)]
+    return out

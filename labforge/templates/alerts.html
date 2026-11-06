@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}Alerts{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Alerts</h1>
+  <span class="muted">Routed by the AlertPolicy in the IaC workspace · Prometheus metrics at <a href="/metrics">/metrics</a></span>
+</div>
+
+{% if message %}<p class="notice ok">{{ message }}</p>{% endif %}
+{% if error %}<p class="notice error">{{ error }}</p>{% endif %}
+
+<section class="stats">
+  <div class="stat {{ 's-down' if firing|selectattr('severity', 'equalto', 'critical')|list }}"><div class="n">{{ firing|selectattr('severity', 'equalto', 'critical')|list|length }}</div><div class="l">Critical</div></div>
+  <div class="stat {{ 's-degraded' if firing|selectattr('severity', 'equalto', 'warning')|list }}"><div class="n">{{ firing|selectattr('severity', 'equalto', 'warning')|list|length }}</div><div class="l">Warning</div></div>
+  <div class="stat"><div class="n">{{ firing|selectattr('acked_by')|list|length }}</div><div class="l">Acknowledged</div></div>
+  <div class="stat"><div class="n">{{ silences|length }}</div><div class="l">Active silences</div></div>
+  <div class="stat"><div class="n">{{ channels|length }}</div><div class="l">Channels</div></div>
+</section>
+
+<section class="card">
+  <h2>Firing</h2>
+  {% if firing %}
+  <table>
+    <thead><tr><th>Severity</th><th>Subject</th><th>Summary</th><th>Since</th><th>Notified</th><th></th></tr></thead>
+    <tbody>
+    {% for a in firing %}
+    <tr>
+      <td><span class="badge sev-{{ a.severity }}">{{ a.severity }}</span></td>
+      <td>{% if a.kind != 'pool' %}<a class="mono" href="/resources/{{ a.subject }}">{{ a.subject }}</a>{% else %}<a class="mono" href="/rigs">{{ a.subject }}</a>{% endif %}<div class="sub">{{ a.env }}{% if a.tier %} · {{ TIER_LABEL.get(a.tier, a.tier) }}{% endif %}</div></td>
+      <td class="sub">{{ a.summary|truncate(120) }}</td>
+      <td class="sub">{{ a.started_at|ago }}</td>
+      <td class="sub">{% if a.acked_by %}acked by {{ a.acked_by }}{% elif a.notified_at %}{{ a.notified_at|ago }}{% else %}—{% endif %}</td>
+      <td class="nowrap">
+        {% if ui_edit %}
+        {% if not a.acked_by %}
+        <form method="post" action="/alerts/ack" class="inline-form"><input type="hidden" name="alert_id" value="{{ a.id }}"><button class="secondary">Ack</button></form>
+        {% endif %}
+        <form method="post" action="/alerts/silence" class="inline-form"><input type="hidden" name="matcher" value="{{ a.subject }}"><input type="hidden" name="minutes" value="60"><input type="hidden" name="reason" value="silenced from the Alerts page"><button class="ghost">Silence 1h</button></form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="ok">Nothing firing.</p>{% endif %}
+</section>
+
+<div class="grid2">
+  <section class="card">
+    <h2>Channels</h2>
+    {% if channels %}
+    <table>
+      <thead><tr><th>Channel</th><th>Type</th><th>Secrets</th><th></th></tr></thead>
+      <tbody>
+      {% for policy, c, ok in channels %}
+      <tr>
+        <td class="mono">{{ c.name }}<div class="sub">{{ policy }}</div></td>
+        <td>{{ c.type }}{% if c.type == 'whatsapp' %} ({{ c.provider }}){% endif %}</td>
+        <td>{% if ok %}<span class="badge s-up">set</span>{% else %}<span class="badge s-degraded">missing</span>{% endif %}</td>
+        <td>{% if ui_edit %}<form method="post" action="/alerts/test" class="inline-form"><input type="hidden" name="channel" value="{{ c.name }}"><button class="secondary">Send test</button></form>{% endif %}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <h3>Routes</h3>
+    <ol class="outline">
+      {% for p in policies %}{% for r in p.spec.routes %}
+      <li><span class="mono sub">{% set m = r.match %}{% if m.env %}env={{ m.env|join(',') }} {% endif %}{% if m.tier %}tier={{ m.tier|join(',') }} {% endif %}{% if m.kind %}kind={{ m.kind|join(',') }} {% endif %}{% if m.severity %}severity={{ m.severity|join(',') }} {% endif %}{% for k, v in m.labels.items() %}{{ k }}={{ v }} {% endfor %}{% if not (m.env or m.tier or m.kind or m.severity or m.labels) %}everything else{% endif %}</span> → {{ r.channels|join(', ') }}{% if r.continue_ %} <span class="sub">(continue)</span>{% endif %}</li>
+      {% endfor %}{% endfor %}
+    </ol>
+    {% else %}
+    <p class="muted">No AlertPolicy in the workspace. Add one (see <code>infra/alerting.yaml</code>) to send notifications.</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Silences</h2>
+    {% if silences %}
+    <ul class="events">
+      {% for s in silences %}
+      <li><span class="mono">{{ s.matcher }}</span> <span class="sub">until {{ s.until|until }} · {{ s.reason }} · {{ s.created_by }}</span>
+        {% if ui_edit %}<form method="post" action="/alerts/unsilence" class="inline-form"><input type="hidden" name="silence_id" value="{{ s.id }}"><button class="ghost">Remove</button></form>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted">No active silences.</p>{% endif %}
+    {% if ui_edit %}
+    <form method="post" action="/alerts/silence" class="apply">
+      <input name="matcher" placeholder="subject glob, e.g. staging.* or pool:sim-sensor" required size="30">
+      <select name="minutes"><option value="60">1 h</option><option value="240">4 h</option><option value="1440">1 day</option></select>
+      <input name="reason" placeholder="reason (maintenance…)" size="18">
+      <button>Silence</button>
+    </form>
+    {% endif %}
+  </section>
+</div>
+
+<div class="grid2">
+  <section class="card">
+    <h2>Notifications sent</h2>
+    {% if log %}
+    <table>
+      <thead><tr><th>When</th><th>Channel</th><th>Result</th></tr></thead>
+      <tbody>
+      {% for n in log %}
+      <tr><td class="sub">{{ n.ts|ago }}</td><td class="mono">{{ n.channel }} <span class="sub">{{ n.channel_type }}</span></td>
+        <td class="{{ 'ok' if n.ok else 'err' }} sub">{{ n.detail|truncate(90) }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="muted">Nothing sent yet.</p>{% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Availability, last 7 days <span class="muted">(lowest first)</span></h2>
+    <table>
+      <thead><tr><th>Resource</th><th>Available</th><th>Down incidents</th></tr></thead>
+      <tbody>
+      {% for r in availability %}
+      <tr><td class="mono"><a href="/resources/{{ r.address }}">{{ r.address }}</a></td>
+        <td>{% if r.availability is not none %}<span class="{{ 'err' if r.availability < 0.99 }}">{{ '%.2f' % (r.availability * 100) }}%</span>{% else %}—{% endif %}</td>
+        <td>{{ r.downIncidents }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+
+{% if resolved %}
+<section class="card">
+  <h2>Recently resolved</h2>
+  <table>
+    <thead><tr><th>Severity</th><th>Subject</th><th>Summary</th><th>Lasted</th><th>Resolved</th></tr></thead>
+    <tbody>
+    {% for a in resolved %}
+    <tr><td><span class="badge sev-{{ a.severity }}">{{ a.severity }}</span></td><td class="mono">{{ a.subject }}</td>
+      <td class="sub">{{ a.summary|truncate(90) }}</td>
+      <td class="sub">{{ ((a.resolved_at - a.started_at).total_seconds() / 60)|round(1) }} min</td>
+      <td class="sub">{{ a.resolved_at|ago }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

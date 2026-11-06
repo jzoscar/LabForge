@@ -1,0 +1,36 @@
+# Who hears about what. Channels hold secret refs only (LABFORGE_SECRET_<REF>); a channel whose
+# secret is not set is skipped and logged on the Alerts page.
+apiVersion: labforge/v1
+kind: AlertPolicy
+metadata:
+  name: lab-alerting
+  description: Notification channels and routing for the R&D lab
+spec:
+  channels:
+    - { name: lab-slack, type: slack, urlRef: slack-lab-webhook }               # #lab-alerts
+    - { name: lab-teams, type: teams, urlRef: teams-lab-webhook }
+    - name: oncall-whatsapp
+      type: whatsapp
+      provider: twilio
+      accountSid: AC00000000000000000000000000000000
+      tokenRef: twilio-token
+      from: "+15550001111"
+      to: [ "+15550002222" ]
+    - name: oncall-sms
+      type: sms
+      accountSid: AC00000000000000000000000000000000
+      tokenRef: twilio-token
+      from: "+15550001111"
+      to: [ "+15550002222" ]
+    - { name: oncall-pagerduty, type: pagerduty, routingKeyRef: pagerduty-lab }
+  routes:
+    # Customer-facing or release-candidate environments down: page whoever is on call.
+    - match: { tier: [ staging, demo, prod ], severity: [ critical ] }
+      channels: [ oncall-pagerduty, oncall-whatsapp, lab-slack ]
+    # A rig pool running out of usable devices blocks every pipeline: on-call, by WhatsApp.
+    - match: { kind: [ pool ] }
+      channels: [ oncall-whatsapp, lab-slack ]
+    # Build machines (disk full, runner process down) and everything else: the lab channel.
+    - channels: [ lab-slack ]
+  repeatAfterMinutes: 240
+  poolMinAvailable: 0.5

@@ -124,3 +124,46 @@ class DeviceHealth(SQLModel, table=True):
     quarantined: bool = False
     reason: str = ""
     updated_at: datetime = Field(default_factory=utcnow)
+
+
+class Alert(SQLModel, table=True):
+    """One alert per condition (fingerprint); it fires, may be acknowledged, and resolves."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    fingerprint: str = Field(index=True, unique=True)  # e.g. "staging.host.stg-app-01:status"
+    subject: str  # resource address or "pool:<name>"
+    env: str = ""
+    tier: str = ""
+    kind: str = ""  # host | network | loadbalancer | container | pool
+    labels_json: str = "{}"
+    severity: str = "warning"  # critical | warning | info
+    summary: str = ""
+    status: str = Field(default="firing", index=True)  # firing | resolved
+    started_at: datetime = Field(default_factory=utcnow)
+    last_seen: datetime = Field(default_factory=utcnow)
+    resolved_at: datetime | None = None
+    acked_by: str | None = None
+    acked_at: datetime | None = None
+    notified_at: datetime | None = None  # last firing notification
+    resolve_notified: bool = False
+
+
+class Silence(SQLModel, table=True):
+    """Mute notifications for matching alerts until a time. `matcher` is a glob on the subject."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    matcher: str
+    until: datetime
+    reason: str = ""
+    created_by: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class NotificationLog(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    ts: datetime = Field(default_factory=utcnow, index=True)
+    channel: str
+    channel_type: str
+    alerts: str = ""  # comma-separated alert ids
+    ok: bool = True
+    detail: str = ""

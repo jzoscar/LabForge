@@ -193,6 +193,17 @@ class Monitor:
         results = await asyncio.gather(*(one(t) for t in targets))
         return await asyncio.to_thread(self._persist, results)
 
+    def _alerts(self, session: Session) -> None:
+        from labforge.alerting import evaluate
+        from labforge.iac.loader import load_policies
+
+        try:
+            policies = load_policies(self.settings.workspace().root)
+            evaluate(session, policies, base_url=self.settings.public_url, secrets=self.secrets)
+        except Exception:  # alerting must never stop monitoring
+            log.exception("alert evaluation failed")
+            session.rollback()
+
     def _persist(self, results: list[tuple[Target, list[ProbeResult]]]) -> dict[str, str]:
         now = utcnow()
         statuses: dict[str, str] = {}
@@ -219,6 +230,8 @@ class Monitor:
             from labforge.rigs import expire_leases  # local import: rigs builds on this module
 
             expire_leases(s)
+            s.commit()
+            self._alerts(s)
             keep = timedelta(hours=self.settings.retention_hours)
             s.exec(delete(AgentReport).where(AgentReport.ts < now - keep))
             s.exec(delete(Event).where(Event.ts < now - keep * 7))

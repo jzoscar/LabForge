@@ -344,3 +344,85 @@ KIND_MODELS: dict[str, type[Model]] = {
     "host": Host,
     "container": Container,
 }
+
+
+# --- alert policy -------------------------------------------------------------
+
+ChannelType = Literal["slack", "teams", "whatsapp", "sms", "pagerduty", "opsgenie", "email", "webhook"]
+Severity = Literal["critical", "warning", "info"]
+
+
+class Channel(Model):
+    """Where notifications go. Credentials and webhook URLs are secret refs, never values."""
+
+    name: str = Field(pattern=NAME)
+    type: ChannelType
+    url_ref: str | None = None  # slack, teams, webhook: secret holding the webhook URL
+    url: str | None = None  # webhook only: a non-secret URL
+    provider: Literal["meta", "twilio"] = "twilio"  # whatsapp
+    account_sid: str | None = None  # twilio
+    phone_number_id: str | None = None  # meta whatsapp
+    token_ref: str | None = None  # twilio auth token / meta access token
+    template: str | None = None  # meta whatsapp: approved template for business-initiated messages
+    sender: str | None = Field(default=None, alias="from")  # twilio sender, e.g. +15550001111
+    to: list[str] = []  # phone numbers or e-mail addresses
+    routing_key_ref: str | None = None  # pagerduty events v2
+    api_key_ref: str | None = None  # opsgenie
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_user_ref: str | None = None  # "user:password"
+    starttls: bool = True
+
+    @model_validator(mode="after")
+    def _check(self) -> Channel:
+        need = {
+            "slack": ["url_ref"], "teams": ["url_ref"], "pagerduty": ["routing_key_ref"], "opsgenie": ["api_key_ref"],
+            "sms": ["account_sid", "token_ref", "sender", "to"], "email": ["smtp_host", "sender", "to"],
+        }.get(self.type, [])
+        if self.type == "whatsapp":
+            need = (["phone_number_id", "token_ref", "to"] if self.provider == "meta"
+                    else ["account_sid", "token_ref", "sender", "to"])
+        if self.type == "webhook" and not (self.url or self.url_ref):
+            need = ["url_ref"]
+        missing = [to_camel(f) if f != "sender" else "from" for f in need if not getattr(self, f)]
+        if missing:
+            raise ValueError(f"{self.type} channel needs {', '.join(missing)}")
+        return self
+
+
+class RouteMatch(Model):
+    env: list[str] = []
+    tier: list[Tier] = []
+    kind: list[str] = []
+    severity: list[Severity] = []
+    labels: dict[str, str] = {}
+
+
+class Route(Model):
+    match: RouteMatch = RouteMatch()
+    channels: list[str] = Field(min_length=1)
+    continue_: bool = Field(default=False, alias="continue")  # keep evaluating later routes
+
+
+class AlertPolicySpec(Model):
+    channels: list[Channel] = []
+    routes: list[Route] = []  # first match wins unless `continue: true`
+    repeat_after_minutes: int = Field(default=240, ge=5)  # re-notify unacknowledged alerts
+    pool_min_available: float = Field(default=0.5, ge=0, le=1)  # warn below this share of usable rig devices
+
+
+class AlertPolicyDoc(Model):
+    api_version: Literal["labforge/v1"]
+    kind: Literal["AlertPolicy"]
+    metadata: Metadata
+    spec: AlertPolicySpec = AlertPolicySpec()
+
+    @model_validator(mode="after")
+    def _references(self) -> AlertPolicyDoc:
+        names = [c.name for c in self.spec.channels]
+        errors = [f"duplicate channel {n!r}" for n in sorted({n for n in names if names.count(n) > 1})]
+        for i, r in enumerate(self.spec.routes):
+            errors += [f"route {i + 1}: unknown channel {c!r}" for c in r.channels if c not in names]
+        if errors:
+            raise ValueError("; ".join(errors))
+        return self
