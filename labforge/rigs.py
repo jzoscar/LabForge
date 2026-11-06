@@ -19,6 +19,8 @@ import time
 from dataclasses import dataclass
 from datetime import timedelta
 
+import httpx
+
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, select
 
@@ -118,19 +120,22 @@ def _heal(state: ResourceState, secrets: SecretResolver, wait_seconds: float) ->
 # --- checkout / release -----------------------------------------------------
 
 
-def lease_view(lease: Lease, state: ResourceState | None) -> dict:
-    spec = state.spec if state else {}
+def device_endpoints(spec: dict) -> dict[str, str]:
+    """Where to reach a device: its HTTP API (from the first http probe) and its BMC."""
     host = spec.get("address")
     probes = spec.get("monitor", {}).get("probes") or []
     http_port = next((p.get("port") for p in probes if p.get("type") == "http" and p.get("port")), None)
+    endpoints = {"http": f"http://{host}:{http_port}" if host and http_port else None,
+                 "bmc": (spec.get("bmc") or {}).get("address")}
+    return {k: v for k, v in endpoints.items() if v}
+
+
+def lease_view(lease: Lease, state: ResourceState | None) -> dict:
+    spec = state.spec if state else {}
     return {
         "leaseId": lease.id, "pool": lease.pool, "holder": lease.holder, "status": lease.status,
         "result": lease.result, "device": state.name if state else lease.address.rsplit(".", 1)[-1],
-        "address": lease.address, "host": host,
-        "endpoints": {k: v for k, v in {
-            "http": f"http://{host}:{http_port}" if host and http_port else None,
-            "bmc": (spec.get("bmc") or {}).get("address"),
-        }.items() if v},
+        "address": lease.address, "host": spec.get("address"), "endpoints": device_endpoints(spec),
         "platform": spec.get("platform"), "labels": spec.get("labels", {}),
         "acquiredAt": lease.acquired_at, "expiresAt": lease.expires_at, "releasedAt": lease.released_at,
         "note": lease.note,
@@ -220,6 +225,80 @@ def release(engine: Engine, lease_id: int, result: str, *, secrets: SecretResolv
         session.commit()
         session.refresh(lease)
         return lease_view(lease, state)
+
+
+def _leased(session: Session, lease_id: int) -> tuple[Lease, ResourceState]:
+    lease = session.get(Lease, lease_id)
+    if not lease or lease.status != "active":
+        raise RigError(f"lease {lease_id} is not active", 409)
+    state = session.exec(select(ResourceState).where(ResourceState.address == lease.address)).first()
+    if state is None:
+        raise RigError(f"device {lease.address} is no longer declared", 409)
+    return lease, state
+
+
+def _device_url(state: ResourceState) -> str:
+    url = device_endpoints(state.spec).get("http")
+    if not url:
+        raise RigError(f"{state.name} has no HTTP endpoint (declare an http probe with a port)", 409)
+    return url
+
+
+def _device_version(url: str) -> dict | None:
+    try:
+        r = httpx.get(f"{url}/version", timeout=5)
+        return r.json() if r.status_code == 200 else None
+    except (httpx.HTTPError, ValueError):
+        return None
+
+
+def device_status(engine: Engine, lease_id: int, secrets: SecretResolver | None = None) -> dict:
+    """Health and running firmware of a leased device."""
+    with Session(engine) as session:
+        lease, state = _leased(session, lease_id)
+        health = check(state, secrets or SecretResolver())
+        return {"leaseId": lease.id, "device": state.name, "healthy": health.healthy, "summary": health.summary,
+                "version": _device_version(_device_url(state))}
+
+
+def flash(engine: Engine, lease_id: int, version: str, *, sha256: str | None = None, size: int | None = None,
+          secrets: SecretResolver | None = None, wait_seconds: float = 60.0) -> dict:
+    """Install a firmware build on a leased device and wait until it runs healthy.
+
+    Devices take the image through the LabForge firmware endpoint (`POST <device>/firmware`); other
+    flashing methods (vendor tools, PXE, serial) plug in here. CI never needs device credentials.
+    """
+    secrets = secrets or SecretResolver()
+    with Session(engine) as session:
+        lease, state = _leased(session, lease_id)
+        url = _device_url(state)
+        started = time.monotonic()
+        try:
+            r = httpx.post(f"{url}/firmware", json={"version": version, "sha256": sha256, "size": size}, timeout=30)
+        except httpx.HTTPError as e:
+            raise RigError(f"flash failed: {state.name} unreachable: {e}", 502) from e
+        if r.status_code >= 400:
+            raise RigError(f"flash failed: {state.name} answered HTTP {r.status_code}", 502)
+
+        deadline = started + wait_seconds
+        running, health = None, None
+        while time.monotonic() < deadline:
+            time.sleep(0.5)
+            running = _device_version(url)
+            if running and running.get("firmware") == version:
+                health = check(state, secrets)
+                if health.healthy:
+                    break
+        ok = bool(running and running.get("firmware") == version and health and health.healthy)
+        lease.note = "; ".join(filter(None, [lease.note, f"flashed {version}" + (f" (sha256 {sha256[:12]})" if sha256 else "")
+                                             + ("" if ok else " - device did not come back healthy")]))
+        session.add(lease)
+        session.commit()
+        if not ok:
+            raise RigError(f"{state.name} did not come back healthy on {version} within {wait_seconds:.0f}s", 504,
+                           device=state.name, running=running, health=health.summary if health else None)
+        return {"leaseId": lease.id, "device": state.name, "version": version, "sha256": sha256,
+                "running": running, "seconds": round(time.monotonic() - started, 2)}
 
 
 def renew(engine: Engine, lease_id: int, ttl_seconds: int) -> dict:

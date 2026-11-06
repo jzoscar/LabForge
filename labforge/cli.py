@@ -239,12 +239,15 @@ def rig_list(server: str = ServerOpt) -> None:
 def rig_checkout(pool: str = typer.Option(..., "--pool"), holder: str = typer.Option(..., "--holder"),
                  ttl: int = typer.Option(1800, "--ttl", help="lease length in seconds"),
                  output: str = typer.Option("text", "--output", help="text | json | env"),
+                 write: Path | None = typer.Option(None, "--write", help="also save the lease as JSON here"),
                  server: str = ServerOpt, token: str | None = TokenOpt) -> None:
     """Borrow a healthy device. Exit code 2 when none is available."""
     import json
 
     lease = _rig_request("POST", server, "/rigs/checkout", token,
                          json={"pool": pool, "holder": holder, "ttl_seconds": ttl})
+    if write:
+        write.write_text(json.dumps(lease, indent=2, default=str))
     if output == "json":
         typer.echo(json.dumps(lease, indent=2, default=str))
     elif output == "env":
@@ -257,6 +260,49 @@ def rig_checkout(pool: str = typer.Option(..., "--pool"), holder: str = typer.Op
         typer.echo(f"lease {lease['leaseId']}: {lease['device']} ({lease['host']}) until {lease['expiresAt']}")
         if lease["note"]:
             typer.echo(f"  {lease['note']}")
+
+
+def _artifact(path: Path | None) -> tuple[str | None, int | None]:
+    if not path:
+        return None, None
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_size
+
+
+@rig_app.command("flash")
+def rig_flash(lease_id: int, version: str = typer.Option(..., "--version", help="firmware version, e.g. git describe"),
+              artifact: Path | None = typer.Option(None, "--artifact", exists=True, dir_okay=False,
+                                                   help="build output; its sha256 is sent so delivery can be verified"),
+              wait: float = typer.Option(60, "--wait", help="seconds to wait for the device to come back healthy"),
+              server: str = ServerOpt, token: str | None = TokenOpt) -> None:
+    """Install a firmware build on a leased device and wait until it runs healthy."""
+    sha256, size = _artifact(artifact)
+    r = _rig_request("POST", server, f"/rigs/leases/{lease_id}/flash", token,
+                     json={"version": version, "sha256": sha256, "size": size, "wait_seconds": wait})
+    typer.echo(f"{r['device']} runs {r['version']} after {r['seconds']}s" + (f" (sha256 {sha256[:12]})" if sha256 else ""))
+
+
+@rig_app.command("check")
+def rig_check(lease_id: int, expect_version: str | None = typer.Option(None, "--expect-version"),
+              artifact: Path | None = typer.Option(None, "--artifact", exists=True, dir_okay=False,
+                                                   help="expect the device to run exactly this build (sha256)"),
+              server: str = ServerOpt) -> None:
+    """Verify a leased device is healthy and runs the expected firmware. Exit code 1 if not."""
+    r = _rig_request("GET", server, f"/rigs/leases/{lease_id}/device", None)
+    running = r["version"] or {}
+    problems = [] if r["healthy"] else [f"unhealthy: {r['summary']}"]
+    if expect_version and running.get("firmware") != expect_version:
+        problems.append(f"runs {running.get('firmware')!r}, expected {expect_version!r}")
+    sha256, _ = _artifact(artifact)
+    if sha256 and running.get("artifact_sha256") != sha256:
+        problems.append(f"artifact sha256 {str(running.get('artifact_sha256'))[:12]} != build {sha256[:12]}")
+    typer.echo(f"{r['device']}: firmware {running.get('firmware')} sha256 {str(running.get('artifact_sha256'))[:12]} "
+               f"healthy={r['healthy']}")
+    for p in problems:
+        typer.secho(f"  {p}", fg="red", err=True)
+    if problems:
+        raise typer.Exit(1)
 
 
 @rig_app.command("release")

@@ -149,3 +149,25 @@ def test_rig_api_and_page(lab, settings, engine):
         r = c.post("/rigs/checkout", data={"pool": "sim-sensor", "holder": "me", "ttl_minutes": 15},
                    follow_redirects=False)
         assert r.status_code == 303 and "checked+out" in r.headers["location"]
+
+
+def test_flash_installs_build_and_waits_until_healthy(lab, engine):
+    lease = rigs.checkout(engine, "sim-sensor", "job")
+    result = rigs.flash(engine, lease["leaseId"], "2.0.0-abc123", sha256="f" * 64, size=123, wait_seconds=10)
+    assert result["running"]["firmware"] == "2.0.0-abc123"
+    assert result["running"]["artifact_sha256"] == "f" * 64
+    status = rigs.device_status(engine, lease["leaseId"])
+    assert status["healthy"] and status["version"]["firmware"] == "2.0.0-abc123"
+    released = rigs.release(engine, lease["leaseId"], "passed")
+    assert "flashed 2.0.0-abc123 (sha256 ffffffffffff)" in released["note"]
+    with pytest.raises(rigs.RigError, match="not active"):
+        rigs.flash(engine, lease["leaseId"], "2.0.1")
+
+
+def test_flash_reports_a_device_that_never_comes_back(lab, engine):
+    lease = rigs.checkout(engine, "sim-sensor", "job")
+    device = lab.devices[lease["device"]]
+    device.booted_at, device.boot_seconds = 0, 5  # up now; the flash reboot takes longer than we wait
+    with pytest.raises(rigs.RigError) as e:
+        rigs.flash(engine, lease["leaseId"], "2.0.0-slow", wait_seconds=1)
+    assert e.value.status == 504 and "did not come back healthy" in e.value.detail["error"]

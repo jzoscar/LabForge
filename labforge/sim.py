@@ -4,7 +4,8 @@ Lets the whole flow - IaC apply, BMC power control, monitoring, rig checkout,
 self-healing - run end to end without hardware. Stdlib only.
 
 Each device serves:
-  http://127.0.0.1:<http_port>   GET /version, GET /health, POST /firmware {"version": ...}
+  http://127.0.0.1:<http_port>   GET /version, GET /health,
+                                 POST /firmware {"version": ..., "sha256": ..., "size": ...}
   http://127.0.0.1:<bmc_port>    Redfish subset: Systems/1 (PowerState, Status.Health),
                                  Actions/ComputerSystem.Reset, Chassis/1/Thermal
 A control API injects faults:
@@ -45,6 +46,7 @@ class Device:
     power: str = "On"
     fault: str | None = None
     firmware: str = ""
+    artifact_sha256: str | None = None  # of the last image flashed, so CI can prove its build arrived
     booted_at: float = field(default_factory=time.time)
     boot_seconds: float = BOOT_SECONDS
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -69,7 +71,7 @@ class Device:
 
     def state(self) -> dict:
         return {"name": self.spec.name, "serial": self.serial, "power": self.power, "fault": self.fault,
-                "firmware": self.firmware, "booting": self.booting, "temperature": self.temperature,
+                "firmware": self.firmware, "artifactSha256": self.artifact_sha256, "booting": self.booting, "temperature": self.temperature,
                 "http": f"http://127.0.0.1:{self.spec.http_port}", "bmc": f"http://127.0.0.1:{self.spec.bmc_port}"}
 
 
@@ -123,7 +125,7 @@ class _DeviceHandler(_Handler):
         d = self.device
         if self.path == "/version":
             self._json(200, {"name": d.spec.name, "firmware": d.firmware, "serial": d.serial,
-                             "uptime_s": int(time.time() - d.booted_at)})
+                             "artifact_sha256": d.artifact_sha256, "uptime_s": int(time.time() - d.booted_at)})
         elif self.path == "/health":
             if d.fault == "overheat":
                 self._json(503, {"status": "overheat", "temperature": d.temperature})
@@ -138,11 +140,13 @@ class _DeviceHandler(_Handler):
         if self.path != "/firmware":
             self._json(404, {"error": "not found"})
             return
-        version = str(self._body().get("version") or "")
+        body = self._body()
+        version = str(body.get("version") or "")
         if not version:
             self._json(400, {"error": "version required"})
             return
         self.device.firmware = version
+        self.device.artifact_sha256 = body.get("sha256")
         self.device.reboot()
         self._json(202, {"firmware": version, "rebooting": True})
 

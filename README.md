@@ -118,10 +118,18 @@ every pool, who holds what, and why a device is quarantined).
 ```bash
 labforge rig list
 labforge rig checkout --pool sim-sensor --holder "$CI_JOB_URL" --output env   # exit code 2: none available
+labforge rig flash <lease-id> --version 1.5.0-g1a2b3c --artifact build/pulse   # install, wait until healthy
+labforge rig check <lease-id> --expect-version 1.5.0-g1a2b3c --artifact build/pulse  # runs exactly this build?
 labforge rig release <lease-id> --result passed|failed|infra-failed
 ```
 
-REST: `GET /api/v1/rigs`, `POST /api/v1/rigs/checkout`, `POST /api/v1/rigs/leases/{id}/release`,
+`flash` sends the build's version and sha256 through LabForge, which keeps the device and BMC
+credentials, so CI never needs them. [BuildPulse](https://github.com/jzoscar/BuildPulse)'s
+`buildpulse device-test` wraps checkout → flash → verify → test → release as one recorded run, and its
+triage reports a failed checkout or flash as `infrastructure`, not as a test failure.
+
+REST: `GET /api/v1/rigs`, `POST /api/v1/rigs/checkout`, `POST /api/v1/rigs/leases/{id}/flash`,
+`GET /api/v1/rigs/leases/{id}/device`, `POST /api/v1/rigs/leases/{id}/release`,
 `POST /api/v1/rigs/leases/{id}/renew`, `GET /api/v1/rigs/leases`, `POST /api/v1/rigs/devices/{address}/unquarantine`.
 
 A GitHub Actions job on a self-hosted runner in the lab (the same three commands work in Bamboo or
@@ -379,12 +387,13 @@ QEMU proves the ARM binary runs; it does not prove the product works on the devi
 - [x] Device checkout / return API: borrow a device from a pool by label and lock it, with timeout-based auto-return
 - [x] Pre-test health check (boot, network, version endpoint); a failure is recorded as an **infrastructure failure**, not a test failure
 - [x] On return, always power-cycle the device back to a known state, whether the tests passed or failed
-- [ ] Flash firmware / deploy build artifacts, and restore a known-good **image** on return (not just a power cycle)
+- [x] Flash a firmware build onto a leased device and verify it runs exactly that build (version + sha256)
+- [ ] Device-specific flashing (vendor update tools, PXE) and restoring a known-good **image** on return (not just a power cycle)
 - [x] Self-healing through the BMC: a device that fails its health check is power-cycled and re-checked; quarantined after two failed health checks
 - [ ] Hard reset through a **PDU** for devices without a BMC
 - [x] CLI and REST API any CI system can call (`labforge rig checkout / release`), with a GitHub Actions example
 - [ ] Ready-made Bamboo and Bitbucket Pipelines steps
-- [ ] BuildPulse integration: test results go into `report.json` with device ID and firmware version in the environment; failures go through `buildpulse triage`
+- [x] BuildPulse integration: `buildpulse device-test` records checkout → flash → verify → test → release in `report.json` with device, lease, firmware version and sha256; `buildpulse triage` separates `infrastructure` from `test` failures
 - [x] Rigs page: pool state, holders, lease expiry, quarantine reasons, lease history
 - [ ] Rig trends: device utilisation, queue time, failure causes (code / device / network); flaky tests tracked separately
 

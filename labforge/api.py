@@ -268,6 +268,30 @@ def rig_renew(lease_id: int, req: RenewRequest, request: Request) -> dict:
     return _rig_call(lambda: rigs.renew(request.app.state.engine, lease_id, req.ttl_seconds))
 
 
+class FlashRequest(BaseModel):
+    version: str
+    sha256: str | None = None
+    size: int | None = None
+    wait_seconds: float = 60.0
+
+
+@router.post("/rigs/leases/{lease_id}/flash", dependencies=[Depends(require_token)])
+def rig_flash(lease_id: int, req: FlashRequest, request: Request) -> dict:
+    """Install a firmware build on a leased device and wait until it runs healthy."""
+    from labforge import rigs
+
+    return _rig_call(lambda: rigs.flash(request.app.state.engine, lease_id, req.version, sha256=req.sha256,
+                                        size=req.size, wait_seconds=req.wait_seconds))
+
+
+@router.get("/rigs/leases/{lease_id}/device")
+def rig_device(lease_id: int, request: Request) -> dict:
+    """Health and running firmware of a leased device."""
+    from labforge import rigs
+
+    return _rig_call(lambda: rigs.device_status(request.app.state.engine, lease_id))
+
+
 @router.get("/rigs/leases")
 def rig_leases(active: bool = False, limit: int = 100, session: Session = Depends(get_session)) -> list[dict]:
     from labforge.models import Lease
