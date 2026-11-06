@@ -416,3 +416,37 @@ async def slack_actions(request: Request, session: Session = Depends(get_session
             return {"text": e.detail["error"]}
         return {"text": f"{alert.subject} returned to its pool by {user}"}
     return {"text": "Unknown action"}
+
+
+# --- builds -------------------------------------------------------------------------
+
+
+@router.post("/builds", dependencies=[Depends(require_token)], status_code=201)
+def ingest_build(report: dict = Body(...), runner: str = "", pipeline: str | None = None,
+                 queued_seconds: float | None = None, session: Session = Depends(get_session)) -> dict:
+    """Ingest a BuildPulse report.json (the file's JSON as the body)."""
+    from labforge.builds import ingest
+
+    if "run_id" not in report or "stages" not in report:
+        raise HTTPException(422, "not a BuildPulse report.json (needs run_id and stages)")
+    row, created = ingest(session, report, runner=runner, pipeline=pipeline, queued_seconds=queued_seconds)
+    return {"id": row.id, "runId": row.run_id, "pipeline": row.pipeline, "created": created}
+
+
+@router.get("/builds")
+def list_builds(pipeline: str | None = None, limit: int = 100, session: Session = Depends(get_session)) -> list[dict]:
+    from labforge.models import BuildRun
+
+    q = select(BuildRun).order_by(BuildRun.id.desc()).limit(min(limit, 1000))
+    if pipeline:
+        q = q.where(BuildRun.pipeline == pipeline)
+    return [r.model_dump(exclude={"stages_json", "cache_json", "meta_json"}) | {"stages": r.stages, "cache": r.cache}
+            for r in session.exec(q)]
+
+
+@router.get("/builds/stats")
+def build_stats(days: int = 30, session: Session = Depends(get_session)) -> dict:
+    from labforge.builds import stats, suggestions
+
+    pipelines = stats(session, min(max(days, 1), 365))
+    return {"pipelines": pipelines, "suggestions": suggestions(pipelines)}

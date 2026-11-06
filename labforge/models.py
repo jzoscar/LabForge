@@ -167,3 +167,33 @@ class NotificationLog(SQLModel, table=True):
     alerts: str = ""  # comma-separated alert ids
     ok: bool = True
     detail: str = ""
+
+
+class BuildRun(SQLModel, table=True):
+    """A BuildPulse run (report.json), ingested to track build-farm speed over time."""
+
+    __table_args__ = (UniqueConstraint("run_id", "runner"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(index=True)
+    runner: str = ""  # machine / CI runner that produced it
+    pipeline: str = Field(index=True)  # preset, or the run kind (e.g. linux-arm64, device-test, scan)
+    kind: str = ""
+    project: str = ""
+    ok: bool = True
+    exit_code: int = 0
+    total_seconds: float = 0.0
+    queued_seconds: float | None = None
+    stages_json: str = "[]"
+    cache_json: str = "{}"
+    meta_json: str = "{}"
+    started_at: datetime | None = None
+    ingested_at: datetime = Field(default_factory=utcnow)
+
+    @property
+    def stages(self) -> list[dict]:
+        return json.loads(self.stages_json or "[]")
+
+    @property
+    def cache(self) -> dict:
+        return json.loads(self.cache_json or "{}")

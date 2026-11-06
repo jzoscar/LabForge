@@ -336,6 +336,45 @@ def rig_release(lease_id: int, result: str = typer.Option(..., "--result", help=
     typer.echo(f"lease {lease_id} released ({result}): {lease['note']}")
 
 
+builds_app = typer.Typer(help="Build-farm speed: ingest BuildPulse runs, see trends and suggestions.",
+                         no_args_is_help=True)
+app.add_typer(builds_app, name="builds")
+
+
+@builds_app.command("ingest")
+def builds_ingest(paths: list[Path] = typer.Argument(..., exists=True, help="report.json, run dir, or log dir"),
+                  runner: str = typer.Option("", "--runner", help="machine or CI runner that built it"),
+                  pipeline: str | None = typer.Option(None, "--pipeline", help="override the pipeline name"),
+                  queued: float | None = typer.Option(None, "--queued", help="seconds the job waited for a runner"),
+                  server: str = ServerOpt, token: str | None = TokenOpt) -> None:
+    """Send BuildPulse report.json files to LabForge."""
+    import json
+
+    from labforge.builds import report_files
+
+    sent = 0
+    for path in paths:
+        for f in report_files(path):
+            params = {k: v for k, v in {"runner": runner, "pipeline": pipeline, "queued_seconds": queued}.items()
+                      if v not in (None, "")}
+            r = _rig_request("POST", server, "/builds", token, json=json.loads(f.read_text()), params=params)
+            sent += 1
+            typer.echo(f"{'+' if r['created'] else '~'} {r['runId']} -> {r['pipeline']}")
+    typer.echo(f"{sent} run(s) ingested")
+
+
+@builds_app.command("stats")
+def builds_stats(days: int = typer.Option(30, "--days"), server: str = ServerOpt) -> None:
+    """Per-pipeline speed and the suggestions derived from it."""
+    data = _rig_request("GET", server, "/builds/stats", None, params={"days": days})
+    for p in data["pipelines"]:
+        hit = f"{p['compilerCacheHitRate']:.0%}" if p["compilerCacheHitRate"] is not None else "-"
+        typer.echo(f"{p['pipeline']:<26} runs {p['runs']:>3}  ok {p['successRate']:.0%}  median {p['medianSeconds']:>6.1f}s"
+                   f"  p90 {p['p90Seconds']:>6.1f}s  cache hits {hit}")
+    for s in data["suggestions"]:
+        typer.echo(f"[{s['severity']}] {s['pipeline']}: {s['text']}")
+
+
 @app.command()
 def serve(host: str = "127.0.0.1", port: int = 8000, reload: bool = False) -> None:
     """Start the web UI + REST API (+ background monitoring)."""

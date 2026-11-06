@@ -127,7 +127,9 @@ async def check_target(t: Target, hosts: dict[str, Host], secrets: SecretResolve
         c = Container.model_validate(t.spec)
         host = hosts.get(f"{t.env}.host.{c.host}")
         if host:
-            coros.append(probes.docker_state(docker_argv(host), c.name))
+            for name in c.instance_names:
+                coros.append(probes.docker_state(docker_argv(host), name, label=f"docker:{name}"
+                                                 if c.replicas > 1 else "docker"))
     elif t.kind == "network":
         n = Network.model_validate(t.spec)
         coros += [probes.ping(s.gateway, label=f"gw:{s.name}") for s in n.subnets if s.gateway]

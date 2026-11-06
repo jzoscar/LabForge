@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Builds{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Build farm</h1>
+  <span class="muted">From BuildPulse run reports · last {{ days }} days</span>
+  <div class="actions">{% for d in (7, 30, 90) %}<a class="btn {{ 'on' if days == d }}" href="?days={{ d }}">{{ d }} days</a>{% endfor %}</div>
+</div>
+
+{% if not pipelines %}
+<section class="card empty">
+  <h2>No builds ingested yet</h2>
+  <p>Send BuildPulse run reports to LabForge after each build:</p>
+  <pre>labforge builds ingest .buildpulse/runs --runner "$RUNNER_NAME" --server http://labforge.lab:8000</pre>
+</section>
+{% else %}
+<section class="stats">
+  <div class="stat"><div class="n">{{ pipelines|length }}</div><div class="l">Pipelines</div></div>
+  <div class="stat"><div class="n">{{ runs }}</div><div class="l">Runs</div></div>
+  <div class="stat {{ 's-up' if success and success >= 0.9 else 's-degraded' }}"><div class="n">{{ '%.0f' % (success * 100) if success is not none else '—' }}%</div><div class="l">Success rate</div></div>
+  <div class="stat {{ 's-degraded' if suggestions }}"><div class="n">{{ suggestions|length }}</div><div class="l">Suggestions</div></div>
+</section>
+
+{% if suggestions %}
+<section class="card">
+  <h2>Where the time goes, and what to do about it</h2>
+  <ul class="events">
+    {% for s in suggestions %}
+    <li><span class="badge sug-{{ s.severity }}">{{ s.severity }}</span> <span class="mono">{{ s.pipeline }}</span> — {{ s.text }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Pipelines</h2>
+  <table>
+    <thead><tr><th>Pipeline</th><th>Runs</th><th>Success</th><th>Median</th><th>p90</th><th>Trend</th><th>Compiler cache</th><th>Deps cold / warm</th><th>Where the time goes</th></tr></thead>
+    <tbody>
+    {% for p in pipelines %}
+    <tr>
+      <td class="mono">{{ p.pipeline }}<div class="sub">last {{ p.lastRun|ago }}</div></td>
+      <td>{{ p.runs }}</td>
+      <td class="{{ 'err' if p.successRate is not none and p.successRate < 0.8 }}">{{ '%.0f' % (p.successRate * 100) }}%</td>
+      <td>{{ '%.1f' % p.medianSeconds }}s</td>
+      <td class="sub">{{ '%.1f' % p.p90Seconds }}s</td>
+      <td>{{ p.spark }}</td>
+      <td>{% if p.compilerCacheHitRate is not none %}<span class="{{ 'err' if p.compilerCacheHitRate < 0.5 }}">{{ '%.0f' % (p.compilerCacheHitRate * 100) }}%</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td class="sub">{% if p.depsColdSeconds %}{{ '%.1f' % p.depsColdSeconds }}s / {{ '%.1f' % (p.depsWarmSeconds or 0) }}s{% else %}—{% endif %}</td>
+      <td class="stage-cell">
+        <div class="stagebar">{% for s in p.stages[:6] %}<i class="st-{{ loop.index }}" style="width: {{ [s.share * 100, 100]|min }}%" title="{{ s.name }} {{ s.avgSeconds }}s ({{ '%.0f' % (s.share * 100) }}%)"></i>{% endfor %}</div>
+        <div class="sub">{% for s in p.stages[:4] %}<span class="legend st-{{ loop.index }}"></span>{{ s.name }} {{ '%.0f' % (s.share * 100) }}% {% endfor %}</div>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Recent runs</h2>
+  <table>
+    <thead><tr><th>Run</th><th>Pipeline</th><th>Runner</th><th>Result</th><th>Total</th><th>Stages</th><th>Cache</th></tr></thead>
+    <tbody>
+    {% for r in recent %}
+    {% set c = r.cache %}
+    <tr>
+      <td class="mono sub">{{ r.run_id }}</td>
+      <td class="mono">{{ r.pipeline }}</td>
+      <td class="sub">{{ r.runner or '—' }}</td>
+      <td>{% if r.ok %}<span class="badge s-up">ok</span>{% else %}<span class="badge s-down">exit {{ r.exit_code }}</span>{% endif %}</td>
+      <td>{{ '%.1f' % r.total_seconds }}s</td>
+      <td class="sub">{% for s in r.stages %}{{ s.name }} {{ '%.1f' % s.seconds }}s{{ ' · ' if not loop.last }}{% endfor %}</td>
+      <td class="sub">{% if c.conan %}conan {{ c.conan }}{% endif %}{% if c.calls %} · hits {{ c.hits }}/{{ c.calls }}{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

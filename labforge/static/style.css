@@ -75,6 +75,17 @@ tr.dim td { opacity: .55; }
 .sev-critical { background: var(--err-bg); color: var(--err); }
 .sev-warning { background: var(--warn-bg); color: var(--warn); }
 .sev-info { background: var(--unk-bg); color: var(--accent); }
+.sug-high { background: var(--err-bg); color: var(--err); }
+.sug-medium { background: var(--warn-bg); color: var(--warn); }
+.sug-low { background: var(--unk-bg); color: var(--unk); }
+.btn.on { border-color: var(--accent); color: var(--accent); }
+.stage-cell { min-width: 220px; }
+.stagebar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--bg); margin-bottom: 4px; }
+.stagebar > i { flex: none; }
+.legend { display: inline-block; }
+.legend { width: 8px; height: 8px; border-radius: 2px; margin: 0 3px 0 6px; vertical-align: middle; }
+.st-1 { background: #2f6fde; } .st-2 { background: #1f8f4e; } .st-3 { background: #b7791f; }
+.st-4 { background: #7a4fd0; } .st-5 { background: #c53030; } .st-6 { background: #8a92a3; }
 .rig-free, .res-passed { background: var(--ok-bg); color: var(--ok); }
 .rig-leased, .rig-active { background: var(--warn-bg); color: var(--warn); }
 .util { display: grid; grid-template-columns: 110px 1fr 48px; gap: 6px; align-items: center; }

@@ -156,14 +156,14 @@ async def ipmi(bmc: Bmc, secrets: SecretResolver, desired_power: str | None, tim
     return ProbeResult("bmc", ok, detail=f"power={power}")
 
 
-async def docker_state(docker: list[str], name: str, timeout: float = 15) -> ProbeResult:
+async def docker_state(docker: list[str], name: str, timeout: float = 15, label: str = "docker") -> ProbeResult:
     try:
         rc, out = await _exec(docker + ["inspect", "-f", "{{.State.Status}}", name], timeout)
     except FileNotFoundError:
-        return ProbeResult("docker", None, detail="docker CLI not installed")
+        return ProbeResult(label, None, detail="docker CLI not installed")
     except TimeoutError:
-        return ProbeResult("docker", None, detail="docker inspect timed out")
+        return ProbeResult(label, None, detail="docker inspect timed out")
     state = out.strip().splitlines()[-1] if out.strip() else ""
     if rc != 0:
-        return ProbeResult("docker", False, detail=state[-200:] or "not found")
-    return ProbeResult("docker", state == "running", detail=f"state={state}")
+        return ProbeResult(label, False, detail=state[-200:] or "not found")
+    return ProbeResult(label, state == "running", detail=f"state={state}")

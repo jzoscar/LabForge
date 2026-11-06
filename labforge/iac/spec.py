@@ -247,6 +247,17 @@ class Container(Model):
     command: list[str] | None = None
     restart: Literal["no", "always", "unless-stopped", "on-failure"] = "unless-stopped"
     labels: dict[str, str] = {}
+    replicas: int = Field(default=1, ge=1, le=50)  # >1: <name>-1 ... <name>-N, e.g. ephemeral build agents
+
+    @model_validator(mode="after")
+    def _check(self) -> Container:
+        if self.replicas > 1 and any(":" in p for p in self.ports):
+            raise ValueError("replicas > 1 cannot publish fixed host ports")
+        return self
+
+    @property
+    def instance_names(self) -> list[str]:
+        return [self.name] if self.replicas == 1 else [f"{self.name}-{i}" for i in range(1, self.replicas + 1)]
 
 
 # --- environment document -------------------------------------------------

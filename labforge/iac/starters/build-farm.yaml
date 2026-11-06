@@ -38,6 +38,14 @@ spec:
       labels: { runner: windows-msvc }
 
   containers:
+    # Ephemeral CI agents: change replicas and apply to scale the farm up or down.
+    - name: ci-runner
+      host: linux-build-01
+      image: myoung34/github-runner:latest
+      replicas: 3
+      env: { RUNNER_SCOPE: org, ORG_NAME: my-org, LABELS: "linux,docker", EPHEMERAL: "true" }
+      secretEnv: { ACCESS_TOKEN: github-runner-token }
+      volumes: [ "/var/run/docker.sock:/var/run/docker.sock" ]
     - name: sccache
       host: linux-build-01
       image: redis:7
