@@ -65,6 +65,8 @@ spec:
       bootstrap:
         - sudo systemctl enable --now actions-runner
       monitor:
-        agent: true
+        agent: true                       # run the agent with --process actions-runner
         probes: [ { type: ping }, { type: tcp, port: 22 } ]
+        processes: [ actions-runner ]
+        thresholds: { disk: 80 }          # build machines fill their disks first
       labels: { role: ci-runner, runner-labels: "self-hosted,linux,rig-sensor-a" }

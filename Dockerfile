@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssh-client 
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY labforge ./labforge
-RUN pip install --no-cache-dir '.[windows]'
+RUN pip install --no-cache-dir '.[windows,postgres]'
 COPY infra ./infra
 ENV LABFORGE_DB_URL=sqlite:////data/labforge.db LABFORGE_IAC_PATH=/app/infra LABFORGE_DATA_DIR=/data
 VOLUME /data

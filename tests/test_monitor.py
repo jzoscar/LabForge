@@ -81,3 +81,28 @@ def test_sweep_local_demo(engine, settings):
         assert {"agent", "drift", "thresholds", "http:8000/api/v1/health"} <= checks
         assert s.exec(select(Event).where(Event.address == "local.host.offline-board")).first().new_status == "down"
         assert s.exec(select(ResourceState).where(ResourceState.address == "local.host.offline-board")).one().status == "down"
+
+
+def test_build_machine_checks_processes_thresholds_and_docker_disk():
+    import json
+
+    host = _host(monitor={"agent": True, "processes": ["actions-runner", "bamboo-agent"],
+                          "thresholds": {"disk": 70}})
+    extra = {"processes": {"actions-runner": True}, "docker": {"disk_percent": 81}}
+    report = _report(disk_percent=60, payload_json=json.dumps({"extra": extra}))
+    res = {r.probe: r for r in agent_checks(host, report, 120, utcnow())}
+    assert res["process:actions-runner"].ok is True
+    assert res["process:bamboo-agent"].ok is None  # agent not told to watch it
+    assert res["thresholds"].ok is False and "docker_disk=81 (>70)" in res["thresholds"].detail
+
+    report = _report(disk_percent=75, payload_json=json.dumps({"extra": {"processes": {"actions-runner": False}}}))
+    res = {r.probe: r for r in agent_checks(host, report, 120, utcnow())}
+    assert res["process:actions-runner"].ok is False and "disk_percent=75 (>70)" in res["thresholds"].detail
+
+
+def test_process_checks_require_agent():
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="agent: true"):
+        Host.model_validate({"name": "h", "platform": {"os": "linux"}, "monitor": {"processes": ["x"]}})

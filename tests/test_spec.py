@@ -50,3 +50,21 @@ def test_duplicate_env_across_files(tmp_path):
     write_env(tmp_path / "b.yaml", HEADER)
     with pytest.raises(LoadError, match="already defined"):
         load_path(tmp_path)
+
+
+def test_additive_migration_adds_new_nullable_columns(tmp_path):
+    import sqlite3
+
+    from labforge.db import make_engine
+
+    db = tmp_path / "old.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE lease (id INTEGER PRIMARY KEY, address VARCHAR, pool VARCHAR, holder VARCHAR,"
+                " purpose VARCHAR, status VARCHAR, result VARCHAR, acquired_at DATETIME, expires_at DATETIME,"
+                " released_at DATETIME, note VARCHAR)")
+    con.execute("INSERT INTO lease (address, pool, holder, status) VALUES ('a', 'p', 'h', 'active')")
+    con.commit()
+    con.close()
+    make_engine(f"sqlite:///{db}")
+    cols = {r[1] for r in sqlite3.connect(db).execute("PRAGMA table_info(lease)")}
+    assert {"address", "note"} <= cols  # existing data untouched, nothing dropped

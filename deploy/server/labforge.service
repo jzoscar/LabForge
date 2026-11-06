@@ -1,0 +1,22 @@
+# LabForge server without containers:
+#   python3 -m venv /opt/labforge/venv && /opt/labforge/venv/bin/pip install '/path/to/LabForge[windows,postgres]'
+#   cp labforge.env.example /etc/labforge/labforge.env && cp labforge.service /etc/systemd/system/
+#   systemctl enable --now labforge
+[Unit]
+Description=LabForge server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=labforge
+WorkingDirectory=/var/lib/labforge
+EnvironmentFile=/etc/labforge/labforge.env
+Environment=LABFORGE_IAC_PATH=/srv/labforge/infra
+Environment=LABFORGE_DATA_DIR=/var/lib/labforge
+ExecStart=/opt/labforge/venv/bin/labforge serve --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -120,9 +120,26 @@ class Probe(Model):
         return f"{'https' if self.https else 'http'}:{self.port or ''}{self.path}"
 
 
+class Thresholds(Model):
+    """Per-host limits for agent metrics; unset fields use the defaults (95 / 95 / 90 / 85)."""
+
+    cpu: float | None = Field(default=None, ge=0, le=100)
+    mem: float | None = Field(default=None, ge=0, le=100)
+    disk: float | None = Field(default=None, ge=0, le=100)
+    temp: float | None = None
+
+
 class Monitor(Model):
     agent: bool = False  # expect reports from the labforge agent
     probes: list[Probe] | None = None  # None -> [ping] when the host has an address
+    processes: list[str] = []  # must be running, as reported by the agent (e.g. actions-runner)
+    thresholds: Thresholds = Thresholds()
+
+    @model_validator(mode="after")
+    def _check(self) -> Monitor:
+        if self.processes and not self.agent:
+            raise ValueError("process checks need agent: true")
+        return self
 
 
 class Host(Model):

@@ -75,9 +75,24 @@ def agent_checks(host: Host, report: AgentReport | None, stale_after: int, now: 
         summary += f" temp {report.temp_c:.0f}C"
     out = [ProbeResult("agent", True, detail=summary)]
 
-    over = [f"{k}={v:.0f} (>{limit})" for k, limit in THRESHOLDS.items()
-            if (v := getattr(report, k)) is not None and v > limit]
+    t = host.monitor.thresholds
+    limits = {**THRESHOLDS, **{k: v for k, v in {"cpu_percent": t.cpu, "mem_percent": t.mem,
+                                                    "disk_percent": t.disk, "temp_c": t.temp}.items() if v is not None}}
+    over = [f"{k}={v:.0f} (>{limits[k]:.0f})" for k in limits
+            if (v := getattr(report, k)) is not None and v > limits[k]]
+    extra = report.payload.get("extra") or {}
+    docker_disk = (extra.get("docker") or {}).get("disk_percent")
+    if docker_disk is not None and docker_disk > limits["disk_percent"]:
+        over.append(f"docker_disk={docker_disk:.0f} (>{limits['disk_percent']:.0f})")
     out.append(ProbeResult("thresholds", not over, detail=", ".join(over) or "within limits"))
+
+    running = extra.get("processes") or {}
+    for name in host.monitor.processes:
+        if name not in running:
+            out.append(ProbeResult(f"process:{name}", None, detail="agent does not watch it (run with --process)"))
+        else:
+            out.append(ProbeResult(f"process:{name}", bool(running[name]),
+                                   detail="running" if running[name] else "not running"))
 
     drift = []
     if report.arch and normalize_arch(report.arch) != host.platform.arch:

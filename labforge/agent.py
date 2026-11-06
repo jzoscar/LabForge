@@ -46,7 +46,56 @@ def _max_temp() -> float | None:
     return round(max(temps), 1) if temps else None
 
 
-def collect(env: str, name: str) -> dict:
+def _processes(names: list[str]) -> dict[str, bool]:
+    """Is each named process running? A name matches the process name, or the file name (with or
+    without extension) of one of its arguments - so "actions-runner", "Runner.Listener" and
+    "bamboo-agent" (java -jar bamboo-agent.jar) all work, but text inside a shell command does not."""
+    wanted = {n.lower(): n for n in names}
+    running = {n: False for n in names}
+    me = os.getpid()
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+        if proc.info["pid"] == me:
+            continue
+        try:
+            words = {(proc.info["name"] or "").lower()}
+            for arg in proc.info["cmdline"] or []:
+                base = os.path.basename(arg).lower()
+                words |= {base, os.path.splitext(base)[0]}
+        except (psutil.Error, TypeError):
+            continue
+        for key in wanted.keys() & words:
+            running[wanted[key]] = True
+    return running
+
+
+def _docker() -> dict | None:
+    """Docker disk usage on build machines: images, containers, build cache, and the data volume."""
+    import shutil
+    import subprocess
+
+    if not shutil.which("docker"):
+        return None
+    try:
+        out = subprocess.run(["docker", "system", "df", "--format", "{{json .}}"], capture_output=True,
+                             text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return {"error": out.stderr.strip()[-200:]}
+    usage = {}
+    for line in out.stdout.splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        usage[row.get("Type", "?")] = {"size": row.get("Size"), "reclaimable": row.get("Reclaimable")}
+    data_root = "/var/lib/docker"
+    if os.path.isdir(data_root):
+        usage["disk_percent"] = psutil.disk_usage(data_root).percent
+    return usage
+
+
+def collect(env: str, name: str, processes: list[str] | None = None) -> dict:
     root = os.environ.get("SystemDrive", "C:") + "\\" if os.name == "nt" else "/"
     vm = psutil.virtual_memory()
     net = psutil.net_io_counters()
@@ -73,6 +122,8 @@ def collect(env: str, name: str) -> dict:
             "net_bytes_sent": net.bytes_sent if net else None,
             "net_bytes_recv": net.bytes_recv if net else None,
             "python": platform.python_version(),
+            "processes": _processes(processes or []),
+            "docker": _docker(),
         },
     }
 
@@ -96,12 +147,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--token", default=os.environ.get("LABFORGE_AGENT_TOKEN"))
     ap.add_argument("--interval", type=int, default=30)
     ap.add_argument("--once", action="store_true", help="send one report and exit")
+    ap.add_argument("--process", action="append", default=[], metavar="NAME",
+                    help="report whether a process is running, e.g. --process actions-runner (repeatable)")
     args = ap.parse_args(argv)
 
     backoff = args.interval
     while True:
         try:
-            resp = post(args.server, args.token, collect(args.env, args.name))
+            resp = post(args.server, args.token, collect(args.env, args.name, args.process))
             if not resp.get("managed", True):
                 print(f"warning: {args.env}.host.{args.name} is not declared in IaC", file=sys.stderr)
             backoff = args.interval

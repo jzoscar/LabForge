@@ -1,0 +1,36 @@
+# LabForge on an always-on lab server, with PostgreSQL for state.
+#   cp deploy/server/labforge.env.example .env   # set the token and secrets
+#   docker compose up -d
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: labforge
+      POSTGRES_USER: labforge
+      POSTGRES_PASSWORD: ${LABFORGE_DB_PASSWORD:?set LABFORGE_DB_PASSWORD in .env}
+    volumes: [ "pgdata:/var/lib/postgresql/data" ]
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U labforge" ]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  labforge:
+    build: .
+    depends_on:
+      db: { condition: service_healthy }
+    env_file: .env
+    environment:
+      LABFORGE_DB_URL: postgresql+psycopg://labforge:${LABFORGE_DB_PASSWORD}@db:5432/labforge
+      LABFORGE_IAC_PATH: /iac
+      LABFORGE_DATA_DIR: /data
+    volumes:
+      - ./infra:/iac                 # the IaC workspace (a git checkout in production)
+      - labforge-data:/data          # revision history, terraform var files
+      - ~/.ssh:/root/.ssh:ro         # keys referenced by keyRef / docker-over-ssh
+    ports: [ "8000:8000" ]
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  labforge-data:

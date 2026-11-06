@@ -375,9 +375,10 @@ pytest
   - CI executors: Bamboo remote agents, Bitbucket Pipelines / GitHub Actions self-hosted runners, labelled by hardware (e.g. `rig-sensor-a`)
   - Shared services: Conan remote (Artifactory), sccache remote cache, internal container registry
   - Networks: lab VLANs (management / devices / build) and the load balancers in front of devices
-- [ ] Build-machine monitoring: free disk space (the most common build-machine failure), Docker disk usage, runner process online
-- [ ] Deploy the platform on an always-on server in the lab with the API token enabled
-- [ ] Agents on every device and build machine; devices that cannot run an agent (embedded firmware) are probed via ping and an HTTP version endpoint
+- [x] Build-machine monitoring: free disk space and Docker disk usage against per-host thresholds (`monitor.thresholds`), CI runner processes online (`monitor.processes`, agent `--process actions-runner`)
+- [x] Deployment artifacts: `docker-compose.yml` (LabForge + PostgreSQL) and a systemd unit (`deploy/server/`)
+- [ ] Deployed on an always-on server in the lab with the API token enabled *(needs the lab)*
+- [ ] Agents on every device and build machine; devices that cannot run an agent are probed via ping and an HTTP version endpoint *(needs the lab)*
 - [ ] **Acceptance**: every lab resource shows "up" on the overview, with no drift and no lost agents, for one week straight
 
 ### M2 Device test rigs (on-device CI)
