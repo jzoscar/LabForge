@@ -5,88 +5,37 @@
   <p>Declare an environment in the IaC directory, then run <code>labforge apply</code> (or start with a dry-run on the <a href="/iac">IaC plan</a> page).</p>
 </section>
 {% else %}
+{% set n_attention = attention|length %}
+{% set worst = attention[0].status if attention else 'up' %}
+<section class="summary s-{{ worst }}">
+  <div class="headline">
+    {% if n_attention == 0 %}All {{ total }} resources are up
+    {% else %}{{ n_attention }} of {{ total }} resource{{ 's' if total != 1 }} need{{ 's' if n_attention == 1 }} attention{% endif %}
+  </div>
+  <div class="sub">
+    {{ envs|length }} environment{{ 's' if envs|length != 1 }} · last health sweep {{ last_sweep|ago }}
+  </div>
+</section>
+
 <section class="stats">
   <div class="stat"><div class="n">{{ total }}</div><div class="l">Managed resources</div></div>
-  {% for s in ['up', 'degraded', 'down', 'unknown'] %}
-  <div class="stat s-{{ s }}"><div class="n">{{ totals.get(s, 0) }}</div><div class="l">{{ STATUS_LABEL[s] }}</div></div>
-  {% endfor %}
-  <div class="stat"><div class="n">{{ arch.get('arm64', 0) + arch.get('armv7', 0) }}</div><div class="l">ARM hosts</div></div>
-  <div class="stat"><div class="n">{{ os.get('windows', 0) }}</div><div class="l">Windows hosts</div></div>
+  <div class="stat s-up"><div class="n">{{ totals.get('up', 0) }}</div><div class="l">Up</div></div>
+  <div class="stat {{ 's-down' if n_attention else '' }}"><div class="n">{{ n_attention }}</div><div class="l">Need attention</div></div>
+  <div class="stat {{ 's-degraded' if agents.live < agents.expected else '' }}"><div class="n">{{ agents.live }}<span class="of">/{{ agents.expected }}</span></div><div class="l">Agents reporting</div></div>
+  <div class="stat"><div class="n">{{ devices.total }}</div><div class="l">Test devices · {{ devices.arm }} ARM · {{ devices.windows }} Windows</div></div>
 </section>
-
-<section class="card">
-  <h2>Environments</h2>
-  <table>
-    <thead><tr><th>Environment</th><th>Tier</th><th>Networks</th><th>LBs</th><th>Hosts</th><th>Containers</th><th>Status</th></tr></thead>
-    <tbody>
-    {% for name, e in envs.items() %}
-    <tr>
-      <td><a href="/resources?env={{ name }}">{{ name }}</a></td>
-      <td><span class="chip tier-{{ e.tier }}">{{ TIER_LABEL.get(e.tier, e.tier) }}</span></td>
-      <td>{{ e.kinds.get('network', 0) }}</td><td>{{ e.kinds.get('loadbalancer', 0) }}</td>
-      <td>{{ e.kinds.get('host', 0) }}</td><td>{{ e.kinds.get('container', 0) }}</td>
-      <td>{% for s, n in e.status.items() %}{{ badge(s) }}<span class="cnt">{{ n }}</span> {% endfor %}</td>
-    </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-</section>
-
-{% macro host_table(rows, show_bmc) %}
-<table>
-  <thead><tr><th>Host</th><th>Platform</th><th>Address</th><th>Status</th><th>CPU</th><th>Memory</th><th>Disk</th><th>Temp</th>{% if show_bmc %}<th>BMC</th>{% endif %}<th>Agent</th></tr></thead>
-  <tbody>
-  {% for r in rows %}
-  {% set rep = r.report %}
-  <tr>
-    <td><a href="/resources/{{ r.st.address }}">{{ r.st.name }}</a><div class="sub">{{ r.st.env }}{% if r.spec.labels %} · {{ r.spec.labels.values()|join(' · ') }}{% endif %}</div></td>
-    <td>{{ platform(r.spec) }}</td>
-    <td class="mono">{{ r.spec.address or '—' }}</td>
-    <td>{{ badge(r.st.status) }}{% if r.st.status_detail %}<div class="sub err">{{ r.st.status_detail|truncate(80) }}</div>{% endif %}</td>
-    <td>{{ pct(rep.cpu_percent if rep else none) }}</td>
-    <td>{{ pct(rep.mem_percent if rep else none) }}</td>
-    <td>{{ pct(rep.disk_percent if rep else none) }}</td>
-    <td>{% if rep and rep.temp_c is not none %}<span class="{{ 'hot' if rep.temp_c > 80 }}">{{ '%.0f' % rep.temp_c }}°C</span>{% else %}<span class="muted">—</span>{% endif %}</td>
-    {% if show_bmc %}<td>{% if r.bmc %}<span class="{{ 'ok' if r.bmc.ok else ('err' if r.bmc.ok == false else 'muted') }}">{{ r.bmc.detail|truncate(40) }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>{% endif %}
-    <td class="sub">{{ rep.ts|ago if rep else ('not deployed' if not r.spec.monitor.agent else 'no reports') }}</td>
-  </tr>
-  {% endfor %}
-  </tbody>
-</table>
-{% endmacro %}
-
-{% if hardware %}
-<section class="card">
-  <h2>Physical test hardware <span class="muted">(bare metal · ARM / x86 · Linux / Windows)</span></h2>
-  {{ host_table(hardware, true) }}
-</section>
-{% endif %}
-
-{% if servers %}
-<section class="card">
-  <h2>Servers / VMs</h2>
-  {{ host_table(servers, false) }}
-</section>
-{% endif %}
 
 <div class="grid2">
   <section class="card">
-    <h2>Networks · VPC · Load balancers</h2>
-    {% if netlb %}
-    <table>
-      <thead><tr><th>Resource</th><th>Type</th><th>Details</th><th>Status</th></tr></thead>
-      <tbody>
-      {% for s in netlb %}{% set sp = s.spec %}
-      <tr>
-        <td><a href="/resources/{{ s.address }}">{{ s.name }}</a><div class="sub">{{ s.env }}</div></td>
-        <td>{{ sp.type if s.kind == 'network' else 'LB · ' ~ sp.driver }}</td>
-        <td class="mono sub">{% if s.kind == 'network' %}{{ sp.cidr }} · {{ sp.subnets|length }} subnet(s){% else %}{{ sp.vip or '-' }} :{{ sp.listeners|map(attribute='port')|join(',') }} → {{ sp.targets|length }} target(s){% endif %}</td>
-        <td>{{ badge(s.status) }}</td>
-      </tr>
+    <h2>Needs attention</h2>
+    {% if attention %}
+    <ul class="events">
+      {% for s in attention %}
+      <li>{{ badge(s.status) }} <a href="/resources/{{ s.address }}">{{ s.address }}</a>
+        {% if s.status_detail %}<div class="sub err">{{ s.status_detail|truncate(110) }}</div>{% endif %}</li>
       {% endfor %}
-      </tbody>
-    </table>
-    {% else %}<p class="muted">None</p>{% endif %}
+    </ul>
+    {% else %}<p class="ok">Nothing to do. Every probe and agent is healthy.</p>{% endif %}
   </section>
 
   <section class="card">
@@ -94,24 +43,57 @@
     {% if events %}
     <ul class="events">
       {% for e in events %}
-      <li><span class="sub">{{ e.ts|ago }}</span> <a href="/resources/{{ e.address }}">{{ e.address }}</a> {{ badge(e.old_status) }} → {{ badge(e.new_status) }}{% if e.detail %}<div class="sub err">{{ e.detail|truncate(100) }}</div>{% endif %}</li>
+      <li><span class="sub">{{ e.ts|ago }}</span> <a href="/resources/{{ e.address }}">{{ e.address }}</a> {{ badge(e.old_status) }} → {{ badge(e.new_status) }}</li>
       {% endfor %}
     </ul>
     {% else %}<p class="muted">No status changes yet</p>{% endif %}
   </section>
 </div>
 
-{% if containers %}
 <section class="card">
-  <h2>Containers</h2>
+  <h2>Environments</h2>
   <table>
-    <thead><tr><th>Container</th><th>Image</th><th>Host</th><th>Status</th></tr></thead>
+    <thead><tr><th>Environment</th><th>Tier</th><th>Resources</th><th>Status</th></tr></thead>
     <tbody>
-    {% for s in containers %}
-    <tr><td><a href="/resources/{{ s.address }}">{{ s.name }}</a><div class="sub">{{ s.env }}</div></td><td class="mono">{{ s.spec.image }}</td><td>{{ s.spec.host }}</td><td>{{ badge(s.status) }}</td></tr>
+    {% for name, e in envs.items() %}
+    <tr>
+      <td><a href="/resources?env={{ name }}">{{ name }}</a></td>
+      <td><span class="chip tier-{{ e.tier }}">{{ TIER_LABEL.get(e.tier, e.tier) }}</span></td>
+      {% set nouns = {'network': 'network', 'loadbalancer': 'load balancer', 'host': 'host', 'container': 'container'} %}
+      <td class="sub">{% for k, n in e.kinds|dictsort %}{{ n }} {{ nouns.get(k, k) }}{{ 's' if n != 1 }}{{ ' · ' if not loop.last }}{% endfor %}</td>
+      <td>{% for s, n in e.status|dictsort %}{{ badge(s) }}<span class="cnt">{{ n }}</span> {% endfor %}</td>
+    </tr>
     {% endfor %}
     </tbody>
   </table>
 </section>
+
+{% if hardware %}
+<section class="card">
+  <h2>Physical test hardware <span class="muted">(bare metal · ARM / x86 · Linux / Windows)</span></h2>
+  <table>
+    <thead><tr><th>Device</th><th>Platform</th><th>Status</th><th>CPU</th><th>Memory</th><th>Disk</th><th>Temp</th><th>BMC</th><th>Agent</th></tr></thead>
+    <tbody>
+    {% for r in hardware %}
+    {% set rep = r.report %}
+    <tr>
+      <td><a href="/resources/{{ r.st.address }}">{{ r.st.name }}</a><div class="sub mono">{{ r.spec.address or '—' }} · {{ r.st.env }}</div></td>
+      <td>{{ platform(r.spec) }}</td>
+      <td>{{ badge(r.st.status) }}</td>
+      <td>{{ pct(rep.cpu_percent if rep else none) }}</td>
+      <td>{{ pct(rep.mem_percent if rep else none) }}</td>
+      <td>{{ pct(rep.disk_percent if rep else none) }}</td>
+      <td>{% if rep and rep.temp_c is not none %}<span class="{{ 'hot' if rep.temp_c > 80 }}">{{ '%.0f' % rep.temp_c }}°C</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td>{% if r.bmc %}<span class="{{ 'ok' if r.bmc.ok else ('err' if r.bmc.ok == false else 'muted') }}" title="{{ r.bmc.detail }}">{{ r.bmc.detail|truncate(32) }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td class="sub">{{ rep.ts|ago if rep else ('not deployed' if not r.spec.monitor.agent else 'no reports') }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if other_count %}
+<p class="more"><a href="/resources">Servers, networks, load balancers and containers ({{ other_count }}) →</a></p>
 {% endif %}
 {% endif %}

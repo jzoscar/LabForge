@@ -71,11 +71,17 @@ def _checks(session: Session) -> dict[str, dict[str, CheckResult]]:
     return out
 
 
-def dashboard_context(session: Session) -> dict:
+SEVERITY = {"down": 0, "degraded": 1, "unknown": 2}
+
+
+def dashboard_context(session: Session, agent_stale_after: int) -> dict:
+    """The overview answers three questions: is the lab healthy, what needs attention,
+    and how is the physical test hardware doing. Everything else lives on /resources."""
     states = list(session.exec(select(ResourceState).order_by(ResourceState.address)))
     hosts = [s for s in states if s.kind == "host"]
     reports = _latest_reports(session, [h.address for h in hosts])
     checks = _checks(session)
+    now = utcnow()
 
     envs: dict[str, dict] = {}
     for s in states:
@@ -83,32 +89,42 @@ def dashboard_context(session: Session) -> dict:
         e["kinds"][s.kind] += 1
         e["status"][s.status] += 1
 
-    def row(h: ResourceState) -> dict:
-        spec = h.spec
-        return {"st": h, "spec": spec, "report": reports.get(h.address), "bmc": checks[h.address].get("bmc")}
+    expect_agent = [h for h in hosts if h.spec.get("monitor", {}).get("agent")]
+    agents_live = sum(1 for h in expect_agent
+                      if h.address in reports and (now - reports[h.address].ts).total_seconds() <= agent_stale_after)
+    hardware = [h for h in hosts if h.spec.get("kind") == "baremetal"]
+    checked = [s.checked_at for s in states if s.checked_at]
 
     return {
         "totals": Counter(s.status for s in states),
         "total": len(states),
+        "attention": sorted((s for s in states if s.status != "up"),
+                            key=lambda s: (SEVERITY.get(s.status, 3), s.address)),
+        "agents": {"live": agents_live, "expected": len(expect_agent)},
+        "devices": {
+            "total": len(hardware),
+            "arm": sum(1 for h in hardware if h.spec["platform"]["arch"] in ("arm64", "armv7")),
+            "windows": sum(1 for h in hardware if h.spec["platform"]["os"] == "windows"),
+        },
+        "last_sweep": max(checked) if checked else None,
         "envs": dict(sorted(envs.items())),
-        "hardware": [row(h) for h in hosts if h.spec.get("kind") == "baremetal"],
-        "servers": [row(h) for h in hosts if h.spec.get("kind") != "baremetal"],
-        "arch": Counter(h.spec["platform"]["arch"] for h in hosts),
-        "os": Counter(h.spec["platform"]["os"] for h in hosts),
-        "netlb": [s for s in states if s.kind in ("network", "loadbalancer")],
-        "containers": [s for s in states if s.kind == "container"],
-        "events": list(session.exec(select(Event).order_by(Event.ts.desc()).limit(12))),
+        "hardware": [{"st": h, "spec": h.spec, "report": reports.get(h.address), "bmc": checks[h.address].get("bmc")}
+                     for h in hardware],
+        "other_count": len(states) - len(hardware),
+        "events": list(session.exec(select(Event).order_by(Event.ts.desc()).limit(8))),
     }
 
 
 @router.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, session: Session = Depends(get_session)):
-    return templates.TemplateResponse(request, "dashboard.html", {"nav": "dash", **dashboard_context(session)})
+    ctx = dashboard_context(session, request.app.state.settings.agent_stale_after)
+    return templates.TemplateResponse(request, "dashboard.html", {"nav": "dash", **ctx})
 
 
 @router.get("/partials/dashboard", response_class=HTMLResponse)
 def dashboard_partial(request: Request, session: Session = Depends(get_session)):
-    return templates.TemplateResponse(request, "_dashboard_body.html", dashboard_context(session))
+    ctx = dashboard_context(session, request.app.state.settings.agent_stale_after)
+    return templates.TemplateResponse(request, "_dashboard_body.html", ctx)
 
 
 @router.get("/resources", response_class=HTMLResponse)

@@ -48,6 +48,14 @@ h2 { font-size: 15px; margin: 0 0 10px; }
 .stat.s-down .n, .stat.a-delete .n { color: var(--err); }
 .stat.s-unknown .n { color: var(--unk); }
 
+.summary { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--ok);
+  border-radius: 10px; padding: 14px 18px; margin-bottom: 16px; }
+.summary.s-degraded, .summary.s-unknown { border-left-color: var(--warn); }
+.summary.s-down { border-left-color: var(--err); }
+.summary .headline { font-size: 18px; font-weight: 650; }
+.stat .of { font-size: 16px; color: var(--muted); font-weight: 500; }
+.more { margin: 0 0 16px; }
+
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { color: var(--muted); font-weight: 500; font-size: 12px; white-space: nowrap; }
