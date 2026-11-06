@@ -1,113 +1,126 @@
 # LabForge
 
-用 IaC（基础设施即代码）编排和监控 **开发 / 测试 / 研发 / 非生产** 环境的测试设备管理平台。
-一个 Python 工程，同时提供：
+An infrastructure-as-code platform for orchestrating and monitoring the hardware behind
+**dev / test / R&D / pre-production** environments. One Python project provides:
 
-- **IaC 引擎**：YAML 声明环境 → `plan` 计算差异 → `apply` 收敛真实设施（类似 Terraform 的状态 + 计划模型）
-- **后台**：FastAPI REST API（`/api/v1`，OpenAPI 文档在 `/docs`）+ 后台监控调度
-- **前台**：服务端渲染的 Web 控制台（总览 / 资源 / IaC 计划 / 执行记录），无需 Node 构建
-- **Agent**：只依赖 `psutil` 的单文件采集器，可直接拷贝到 **ARM Linux 板卡** 和 **Windows** 测试机
+- **IaC engine**: declare environments in YAML → `plan` computes the diff → `apply` converges the real
+  infrastructure (a Terraform-style state + plan model)
+- **Backend**: FastAPI REST API (`/api/v1`, OpenAPI docs at `/docs`) with a background monitoring scheduler
+- **Frontend**: a server-rendered web console (overview, resources, IaC plan, run history); no Node build
+- **Agent**: a single-file collector that only needs `psutil`, so it can be copied straight onto
+  **ARM Linux boards** and **Windows** test machines
 
-## 定位：构建流水线背后的“硬件实验室”
+## Positioning: the hardware lab behind the build pipeline
 
-LabForge 面向的是嵌入式 / 工业传感器产品的构建与测试团队。这类团队的代码要用交叉编译的 ARM GCC 和 MSVC 构建，最终跑在真实设备上，**一次有问题的发布会让客户的生产线停下来**。
+LabForge is aimed at build and test teams for embedded and industrial sensor products. Their code is
+built with cross-compiled ARM GCC and with MSVC, and it ends up running on real devices: **a bad release
+can stop a customer's production line**.
 
-构建本身（编译、缓存、日志、自动排障、SBOM）由姊妹项目 [BuildPulse](https://github.com/jzoscar/BuildPulse) 负责。LabForge 管它背后的东西：
+The build itself (compiling, caching, logs, automated triage, SBOMs) is handled by the sister project
+[BuildPulse](https://github.com/jzoscar/BuildPulse). LabForge manages what sits behind it:
 
-- **设备测试台（test rigs）**：一池 ARM 传感器设备，CI 用之前要先借出并加锁，跑完要恢复到已知良好的镜像
-- **构建机群**：Linux Docker 构建主机、Windows MSVC 构建机、Bamboo 远程 agent 和 Bitbucket Pipelines / GitHub Actions 自托管 runner
-- **共享基础设施**：Conan 远端仓库（Artifactory）、sccache 远端缓存、制品库、实验室网络、负载均衡
+- **Device test rigs**: a pool of ARM sensor devices that CI checks out and locks before use, and that
+  are restored to a known-good image afterwards
+- **Build farm**: Linux Docker build hosts, Windows MSVC build machines, Bamboo remote agents, and
+  Bitbucket Pipelines / GitHub Actions self-hosted runners
+- **Shared infrastructure**: Conan remote (Artifactory), sccache remote cache, artifact storage, lab
+  networks, load balancers
 
-这些全部用 IaC 声明、一键收敛、持续监控。目标是让流水线失败时能立刻分清：**是代码坏了，还是实验室坏了。**
+All of it is declared as code, converged with one command, and monitored continuously. The goal: when a
+pipeline fails, know immediately **whether the code broke or the lab broke.**
 
-### 与岗位要求的对应
+### What a build & test team needs, and where LabForge covers it
 
-| 岗位关注点 | LabForge 中的对应 |
+| Need | Where LabForge covers it |
 |---|---|
-| 产品跑在真实硬件上，坏的发布会让生产线停摆 | M2 设备测试台：每次发布前在真机上验证；M6 金丝雀发布与自动回滚 |
-| ARM 交叉编译 + Windows MSVC 双平台 | 设备池（ARM Linux）与构建机（Windows / Linux）都在 IaC 里按平台建模，Agent 检测架构漂移 |
-| Docker 构建环境 | 构建主机与缓存服务以容器形式由 IaC 管理 |
-| 把 40 分钟的构建缩短到一杯咖啡的时间 | M4 构建机群容量与远端缓存服务，排队时间与缓存命中率可观测 |
-| “修复，而不只是提单”（fix, don't just file） | 失败自动区分基础设施问题与代码问题，设备问题自动隔离和恢复，代码问题交给 BuildPulse triage |
-| Bamboo → Bitbucket Pipelines 迁移 | runner / agent 按硬件打标签，两套 CI 都能向 LabForge 借设备 |
-| 欧盟 CRA（网络弹性法案） | M5 每台设备的固件版本清单，新 CVE 出现时能查到哪些设备、哪些版本受影响 |
-| 在实际工作中用 AI 产出生产级结果 | 失败上下文（设备 ID、固件、健康检查、日志）结构化输出，可直接交给 AI 排障 |
+| Products run on real hardware; a bad release stops a production line | M2 device test rigs validate every release on real devices; M6 canary rollout and automatic rollback |
+| ARM cross-compilation plus Windows MSVC | Device pools (ARM Linux) and build machines (Windows / Linux) are modelled per platform in IaC; the agent detects architecture drift |
+| Docker build environments | Build hosts and cache services are managed as containers through IaC |
+| Turn 40-minute builds into a coffee break | M4 build farm capacity and remote cache services, with queue time and cache hit rate made visible |
+| "Fix, don't just file" | Failures are classified as infrastructure vs. code; device faults are quarantined and self-healed, code faults go to BuildPulse triage |
+| Bamboo → Bitbucket Pipelines migration | Runners and agents are labelled by the hardware they reach; both CI systems borrow devices from LabForge through the same API |
+| EU Cyber Resilience Act (CRA) | M5 firmware inventory per device, so a new CVE maps straight to affected devices and versions |
+| Using AI in real work with production-grade output | Failure context (device ID, firmware, health checks, logs) is emitted as structured data an AI agent can triage directly |
 
-## 能管什么
+## What it manages
 
-| 资源 | IaC 段 | 编排能力（driver） | 监控 |
+| Resource | IaC section | Orchestration (driver) | Monitoring |
 |---|---|---|---|
-| 网络 / VPC / VLAN / 物理网段 | `networks` | `record`（登记）· `terraform`（委托已有模块） | 各子网网关 ping |
-| 负载均衡 | `loadBalancers` | `record` · `haproxy`（渲染配置经 SSH 下发、校验、reload）· `terraform` | VIP 监听端口 + 每个后端健康检查 |
-| 实体硬件（裸金属，ARM / x86） | `hosts` (`kind: baremetal`) | BMC 电源控制（Redfish / IPMI）+ SSH / WinRM 初始化命令 | ping/tcp/http 探针、BMC 健康/电源/温度、Agent 指标 |
-| Windows 机器（含 Windows on ARM） | `hosts` (`platform.os: windows`) | WinRM 执行 PowerShell | 同上（WinRM/RDP 端口、Agent） |
-| Linux 服务器 / 虚拟机 / 云主机 | `hosts` (`kind: vm/cloud`) | SSH 初始化命令 | 同上 |
-| 容器 | `containers` | Docker（本机或 `docker -H ssh://` 远程） | `docker inspect` 运行状态 |
+| Networks / VPC / VLAN / physical segments | `networks` | `record` (inventory) · `terraform` (delegate to an existing module) | Ping each subnet gateway |
+| Load balancers | `loadBalancers` | `record` · `haproxy` (render config, push over SSH, validate, reload) · `terraform` | VIP listener ports plus a health check on every backend |
+| Physical hardware (bare metal, ARM / x86) | `hosts` (`kind: baremetal`) | BMC power control (Redfish / IPMI) plus SSH / WinRM bootstrap commands | ping/tcp/http probes, BMC health/power/temperature, agent metrics |
+| Windows machines (including Windows on ARM) | `hosts` (`platform.os: windows`) | PowerShell over WinRM | Same as above (WinRM/RDP ports, agent) |
+| Linux servers / VMs / cloud hosts | `hosts` (`kind: vm/cloud`) | SSH bootstrap commands | Same as above |
+| Containers | `containers` | Docker (local, or remote via `docker -H ssh://`) | `docker inspect` running state |
 
-额外的监控能力：
+Additional monitoring:
 
-- **漂移检测**：Agent 上报的 OS / CPU 架构与 IaC 声明不一致时（例如 ARM 板被刷成 x86 镜像）标记为降级
-- **阈值告警**：CPU > 95%、内存 > 95%、磁盘 > 90%、温度 > 85°C
-- **Agent 失联**：超过 `LABFORGE_AGENT_STALE_AFTER` 秒未上报即判定异常
-- **状态变化事件**：每次 正常 / 降级 / 故障 / 未知 之间的切换都会记录
+- **Drift detection**: when the OS or CPU architecture reported by the agent differs from the IaC
+  declaration (for example an ARM board re-imaged with an x86 image), the host is marked degraded
+- **Thresholds**: CPU > 95%, memory > 95%, disk > 90%, temperature > 85 °C
+- **Lost agents**: no report within `LABFORGE_AGENT_STALE_AFTER` seconds counts as a failure
+- **Status events**: every transition between up / degraded / down / unknown is recorded
 
-## 快速开始（本机演示，无需真实硬件）
+## Quick start (local demo, no real hardware needed)
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e '.[dev]'          # Windows 目标机需要 WinRM 时：pip install -e '.[windows]'
+pip install -e '.[dev]'          # add the windows extra for WinRM targets: pip install -e '.[dev,windows]'
 ```
 
 ```bash
 export LABFORGE_IAC_PATH=examples/local
 labforge plan
-labforge apply -y                 # 演示环境只做登记，不会动任何机器
-labforge serve                    # 打开 http://127.0.0.1:8000
+labforge apply -y                 # the demo only records inventory; it touches no machines
+labforge serve                    # open http://127.0.0.1:8000
 ```
 
-另开一个终端，让本机作为一台“测试硬件”上报：
+In a second terminal, let this machine report as a piece of "test hardware":
 
 ```bash
 labforge agent --env demo --name this-mac
 ```
 
-## 管理你的实验室
+## Managing your lab
 
-`infra/` 是真实环境的起点模板（`dev.yaml` 开发、`rnd.yaml` 研发、`staging.yaml` 非生产），按实际情况修改地址、BMC、账号后：
+`infra/` holds starter templates for real environments (`dev.yaml` development, `rnd.yaml` R&D,
+`staging.yaml` pre-production). After filling in your addresses, BMCs and accounts:
 
 ```bash
-labforge validate infra           # 结构 + 交叉引用校验（子网是否在 CIDR 内、LB 目标是否存在……）
-labforge plan infra               # 只看差异
-labforge apply infra --dry-run    # 打印将执行的每一条 ssh / ipmitool / docker / terraform 命令
-labforge apply infra              # 真实执行（会二次确认）
-labforge state                    # 查看所有资源及健康状态
-labforge destroy --env rnd        # 拆除一个环境（实体机只会被注销，绝不会被擦除）
+labforge validate infra           # schema + cross-reference checks (subnets inside the CIDR, LB targets exist, ...)
+labforge plan infra               # show the diff only
+labforge apply infra --dry-run    # print every ssh / ipmitool / docker / terraform command that would run
+labforge apply infra              # apply for real (asks for confirmation)
+labforge state                    # list every resource and its health
+labforge destroy --env rnd        # tear down one environment (physical machines are deregistered, never wiped)
 ```
 
-### 密钥
+### Secrets
 
-IaC 中只写引用名，值从环境变量读取：`credentialsRef: bmc-default` → `LABFORGE_SECRET_BMC_DEFAULT`。
+IaC files only hold reference names; values come from environment variables:
+`credentialsRef: bmc-default` → `LABFORGE_SECRET_BMC_DEFAULT`.
 
-| 引用 | 格式 |
+| Reference | Format |
 |---|---|
 | `bmc.credentialsRef` | `user:password` |
-| `connection.keyRef` | SSH 私钥文件路径 |
-| `connection.passwordRef` | WinRM 密码 |
-| `containers[].secretEnv` | 容器环境变量的值（不会出现在命令行或日志中） |
+| `connection.keyRef` | Path to an SSH private key |
+| `connection.passwordRef` | WinRM password |
+| `containers[].secretEnv` | Value of a container environment variable (never appears in argv or logs) |
 
-`--dry-run` 不需要任何密钥。IPMI 密码通过 `IPMI_PASSWORD` 环境变量传给 `ipmitool -E`，不会进入命令行和日志。
+`--dry-run` needs no secrets. The IPMI password is passed to `ipmitool -E` through the `IPMI_PASSWORD`
+environment variable, so it never reaches the command line or the logs.
 
-YAML 中还可以用 `${VAR}` / `${VAR:-默认值}` 引用普通环境变量。
+YAML files can also reference ordinary environment variables with `${VAR}` / `${VAR:-default}`.
 
-### 安全护栏
+### Guardrails
 
-- `tier: prod` 的环境默认拒绝变更，必须显式 `--allow-prod`（API: `allow_prod: true`）
-- 每次 apply 只作用于所加载文件里出现的环境，不会误删其它环境的状态
-- Web 端默认只能 dry-run；真实执行需 `LABFORGE_UI_APPLY=1`
-- 设置 `LABFORGE_API_TOKEN` 后，所有写 API 和 Agent 上报都必须带 `X-LabForge-Token`
-- 同一服务进程内 apply 串行执行
+- Environments with `tier: prod` refuse changes unless `--allow-prod` is passed (API: `allow_prod: true`)
+- An apply only affects the environments present in the loaded files; other environments' state is never deleted
+- The web UI is dry-run only by default; real applies need `LABFORGE_UI_APPLY=1`
+- With `LABFORGE_API_TOKEN` set, every write API call and agent report must send `X-LabForge-Token`
+- Applies run one at a time within a server process
 
-## IaC 规范速查
+## IaC reference
 
 ```yaml
 apiVersion: labforge/v1
@@ -127,9 +140,9 @@ spec:
       address: 10.20.1.11
       subnet: lab-vpc/arm
       bmc: { type: redfish, address: 10.20.0.11, credentialsRef: bmc-default }   # redfish | ipmi
-      power: "on"                         # 期望电源状态（需要 bmc）
+      power: "on"                         # desired power state (requires bmc)
       connection: { type: ssh, user: lab, keyRef: lab-ssh-key }                 # ssh | winrm | none
-      bootstrap: [ "sudo apt-get install -y python3-psutil" ]  # 幂等命令；首次创建或内容变化时执行
+      bootstrap: [ "sudo apt-get install -y python3-psutil" ]  # idempotent; runs on create and when changed
       monitor:
         agent: true
         probes: [ { type: ping }, { type: tcp, port: 22 }, { type: http, port: 8080, path: /healthz } ]
@@ -138,168 +151,171 @@ spec:
     - name: test-api
       vip: 10.20.3.100
       driver: haproxy                     # record | haproxy | terraform
-      host: svc-01                        # haproxy 运行所在主机（SSH）
+      host: svc-01                        # host that runs haproxy (over SSH)
       listeners: [ { port: 8080, protocol: http, targetPort: 8080 } ]
       targets: [ arm-node-01 ]
       healthCheck: { protocol: http, port: 8080, path: /healthz }
   containers:
     - name: test-db
-      host: svc-01                        # connection: none 的主机表示本机 docker
+      host: svc-01                        # a host with connection: none means the local docker daemon
       image: postgres:16
       ports: ["5432:5432"]
       env: { POSTGRES_DB: testdb }
       secretEnv: { POSTGRES_PASSWORD: test-db-password }
 ```
 
-未知字段会直接报错（防止拼写错误被静默忽略）。完整例子见 [infra/dev.yaml](infra/dev.yaml)。
+Unknown fields are rejected, so typos never get silently ignored. See [infra/dev.yaml](infra/dev.yaml)
+for a full example.
 
-## 部署 Agent
+## Deploying the agent
 
-Agent 是单文件 [labforge/agent.py](labforge/agent.py)，只依赖 `psutil`，用 `--env` + `--name` 对应 IaC 里的主机。
+The agent is the single file [labforge/agent.py](labforge/agent.py). It only needs `psutil`, and
+`--env` + `--name` match it to a host in the IaC.
 
-**ARM / x86 Linux（systemd）**：
+**ARM / x86 Linux (systemd)**:
 
 ```bash
 sudo mkdir -p /opt/labforge && sudo cp labforge/agent.py /opt/labforge/
-sudo apt-get install -y python3-psutil          # 或 pip install psutil
+sudo apt-get install -y python3-psutil          # or: pip install psutil
 sudo cp deploy/agent/labforge-agent.service /etc/systemd/system/
-sudo systemctl edit labforge-agent               # 填写 LABFORGE_SERVER / LABFORGE_ENV / LABFORGE_HOST / LABFORGE_AGENT_TOKEN
+sudo systemctl edit labforge-agent               # set LABFORGE_SERVER / LABFORGE_ENV / LABFORGE_HOST / LABFORGE_AGENT_TOKEN
 sudo systemctl enable --now labforge-agent
 ```
 
-**Windows（x64 与 ARM64）**：以管理员 PowerShell 运行 [deploy/agent/install-agent.ps1](deploy/agent/install-agent.ps1)，会注册一个开机自启的计划任务。
+**Windows (x64 and ARM64)**: run [deploy/agent/install-agent.ps1](deploy/agent/install-agent.ps1) from
+an elevated PowerShell; it registers a scheduled task that starts at boot.
 
-温度采集：Linux 读取 `psutil` 传感器，ARM 板卡回退到 `/sys/class/thermal`；Windows 上温度请依赖 BMC（Redfish）。
+Temperatures: on Linux the agent reads `psutil` sensors and falls back to `/sys/class/thermal` on ARM
+boards; on Windows, rely on the BMC (Redfish) for temperatures.
 
-## 架构
+## Architecture
 
 ```
             ┌──────────── labforge serve ─────────────┐
- 浏览器 ───▶ │ Web UI (Jinja2)   REST API /api/v1      │
+ Browser ──▶ │ Web UI (Jinja2)   REST API /api/v1      │
  CLI ──────▶ │ service: plan / apply / runs            │
             │ IaC: loader → planner → applier          │──▶ ssh · winrm · redfish · ipmitool · docker · terraform
-            │ monitor: 周期探测 + Agent 指标 + 漂移       │──▶ ping · tcp · http · BMC · docker inspect
+            │ monitor: probes + agent metrics + drift  │──▶ ping · tcp · http · BMC · docker inspect
             └───────────────┬─────────────────────────┘
-                            │ SQLite（默认）/ PostgreSQL：状态、执行记录、探测结果、事件、指标
+                            │ SQLite (default) / PostgreSQL: state, runs, probe results, events, metrics
  Agent (ARM/Windows) ───────┘ POST /api/v1/agent/report
 ```
 
-| 目录 | 作用 |
+| Path | Purpose |
 |---|---|
-| `labforge/iac/spec.py` | IaC 模式定义与校验 |
-| `labforge/iac/planner.py` | 期望 vs 状态 → 有序变更计划（依赖拓扑排序，删除逆序） |
-| `labforge/iac/applier.py` · `providers/` | 执行计划；各资源驱动 |
-| `labforge/monitor/` | 异步探针、巡检、状态聚合 |
-| `labforge/api.py` · `web.py` · `templates/` | 后台 API 与前台页面 |
-| `labforge/agent.py` | 主机 Agent |
+| `labforge/iac/spec.py` | IaC schema and validation |
+| `labforge/iac/planner.py` | Desired vs. recorded state → ordered plan (topological order, deletes reversed) |
+| `labforge/iac/applier.py` · `providers/` | Plan execution; one driver per resource type |
+| `labforge/monitor/` | Async probes, health sweeps, status aggregation |
+| `labforge/api.py` · `web.py` · `templates/` | Backend API and web pages |
+| `labforge/agent.py` | Host agent |
 
-## 配置
+## Configuration
 
-| 环境变量 | 默认值 | 说明 |
+| Environment variable | Default | Description |
 |---|---|---|
-| `LABFORGE_DB_URL` | `sqlite:///labforge.db` | 多人/多实例使用时换成 PostgreSQL |
-| `LABFORGE_IAC_PATH` | `infra` | IaC 文件或目录 |
-| `LABFORGE_API_TOKEN` | 无 | 写 API 与 Agent 上报的令牌 |
-| `LABFORGE_MONITOR` | `true` | 服务内是否运行巡检 |
-| `LABFORGE_MONITOR_INTERVAL` | `30` | 巡检间隔（秒） |
-| `LABFORGE_AGENT_STALE_AFTER` | `120` | Agent 失联判定（秒） |
-| `LABFORGE_RETENTION_HOURS` | `24` | Agent 指标保留时长（事件保留 7 倍） |
-| `LABFORGE_UI_APPLY` | `false` | 允许网页端真实执行 |
-| `LABFORGE_DATA_DIR` | `.labforge` | Terraform 变量文件等临时产物 |
+| `LABFORGE_DB_URL` | `sqlite:///labforge.db` | Switch to PostgreSQL for multiple users or instances |
+| `LABFORGE_IAC_PATH` | `infra` | IaC file or directory |
+| `LABFORGE_API_TOKEN` | none | Token for write API calls and agent reports |
+| `LABFORGE_MONITOR` | `true` | Run health sweeps inside the server |
+| `LABFORGE_MONITOR_INTERVAL` | `30` | Sweep interval (seconds) |
+| `LABFORGE_AGENT_STALE_AFTER` | `120` | Seconds without a report before an agent counts as lost |
+| `LABFORGE_RETENTION_HOURS` | `24` | Agent metric retention (events are kept 7× longer) |
+| `LABFORGE_UI_APPLY` | `false` | Allow real applies from the web UI |
+| `LABFORGE_DATA_DIR` | `.labforge` | Generated files such as Terraform variable files |
 
-## 开发
+## Development
 
 ```bash
 pytest
 ```
 
-## 里程碑
+## Milestones
 
-| 里程碑 | 状态 | 目标 |
+| Milestone | Status | Goal |
 |---|---|---|
-| **M0 平台骨架** | ✅ 已完成（v0.1.0） | IaC、plan/apply、各类驱动、监控、Agent、Web 控制台 |
-| **M1 构建与测试实验室接入** | 🚧 下一步 | 把设备池、构建机、runner、缓存服务全部用 IaC 管起来 |
-| **M2 设备测试台（CI 真机测试）** | ⏳ 计划中 | CI 能自动借设备、刷固件、跑真机测试、归还并恢复 |
-| **M3 告警与值班** | ⏳ 计划中 | 通过 Slack / Teams / WhatsApp / 短信 把问题推给对的人 |
-| **M4 构建机群容量与速度** | ⏳ 计划中 | 构建排队少、缓存热，构建时间可度量、可优化 |
-| **M5 安全、合规与 GitOps** | ⏳ 计划中 | 多人安全协作，满足 CRA 的追溯要求 |
-| **M6 生产发布护栏** | ⏳ 计划中 | 发往客户产线的版本先过真机，再分阶段发布 |
+| **M0 Platform foundation** | ✅ Done (v0.1.0) | IaC, plan/apply, drivers, monitoring, agent, web console |
+| **M1 Build & test lab onboarding** | 🚧 Next | Device pools, build machines, runners and cache services all managed as code |
+| **M2 Device test rigs (on-device CI)** | ⏳ Planned | CI checks out a device, flashes it, runs on-device tests, then returns and restores it |
+| **M3 Alerting & on-call** | ⏳ Planned | Push problems to the right person via Slack / Teams / WhatsApp / SMS |
+| **M4 Build farm capacity & speed** | ⏳ Planned | Short queues, warm caches, build time that is measured and optimised |
+| **M5 Security, compliance & GitOps** | ⏳ Planned | Safe multi-user operation and CRA traceability |
+| **M6 Production release guardrails** | ⏳ Planned | Releases for customer production lines pass real devices first, then roll out in stages |
 
-### M0 平台骨架 ✅
+### M0 Platform foundation ✅
 
-- [x] IaC 模式：环境 / 网络 / 负载均衡 / 主机 / 容器，含交叉引用校验
-- [x] plan / apply / destroy，依赖拓扑排序，状态存储，dry-run，生产环境护栏
-- [x] 驱动：Redfish · IPMI · SSH · WinRM · Docker · HAProxy · Terraform
-- [x] 监控：ping / TCP / HTTP / BMC / 容器 / LB 后端 / 网关，状态变化事件
-- [x] Agent（ARM Linux / Windows），阈值告警，架构与系统漂移检测
-- [x] Web 控制台 + REST API，自动化测试
+- [x] IaC schema: environments / networks / load balancers / hosts / containers, with cross-reference validation
+- [x] plan / apply / destroy, topological ordering, state storage, dry-run, production guardrail
+- [x] Drivers: Redfish · IPMI · SSH · WinRM · Docker · HAProxy · Terraform
+- [x] Monitoring: ping / TCP / HTTP / BMC / containers / LB backends / gateways, status-change events
+- [x] Agent (ARM Linux / Windows), threshold alerts, architecture and OS drift detection
+- [x] Web console + REST API, automated tests
 
-### M1 构建与测试实验室接入 🚧
+### M1 Build & test lab onboarding 🚧
 
-- [ ] 在 IaC 中声明整个实验室：
-  - 设备池：按产品系列分组的 ARM 传感器设备（带固件版本、序列号标签）
-  - 构建机：Linux Docker 构建主机、Windows MSVC 构建机
-  - CI 执行器：Bamboo 远程 agent、Bitbucket Pipelines / GitHub Actions 自托管 runner，带硬件标签（如 `rig-sensor-a`）
-  - 共享服务：Conan 远端（Artifactory）、sccache 远端缓存、内部镜像仓库
-  - 网络：实验室 VLAN（管理网 / 设备网 / 构建网），以及设备前面的负载均衡
-- [ ] 构建机专项监控：磁盘余量（构建机最常见的故障）、Docker 磁盘占用、runner 进程是否在线
-- [ ] 平台服务部署到实验室常驻服务器，开启 API 令牌
-- [ ] 所有设备、构建机装好 Agent；没有 Agent 的设备（嵌入式固件）走 ping / HTTP 版本接口探测
-- [ ] **验收**：实验室全部资源在总览页“正常”，没有漂移和失联，连续运行一周
+- [ ] Declare the whole lab in IaC:
+  - Device pools: ARM sensor devices grouped by product family (labelled with firmware version and serial number)
+  - Build machines: Linux Docker build hosts, Windows MSVC build machines
+  - CI executors: Bamboo remote agents, Bitbucket Pipelines / GitHub Actions self-hosted runners, labelled by hardware (e.g. `rig-sensor-a`)
+  - Shared services: Conan remote (Artifactory), sccache remote cache, internal container registry
+  - Networks: lab VLANs (management / devices / build) and the load balancers in front of devices
+- [ ] Build-machine monitoring: free disk space (the most common build-machine failure), Docker disk usage, runner process online
+- [ ] Deploy the platform on an always-on server in the lab with the API token enabled
+- [ ] Agents on every device and build machine; devices that cannot run an agent (embedded firmware) are probed via ping and an HTTP version endpoint
+- [ ] **Acceptance**: every lab resource shows "up" on the overview, with no drift and no lost agents, for one week straight
 
-### M2 设备测试台（CI 真机测试）
+### M2 Device test rigs (on-device CI)
 
-QEMU 只能证明 ARM 二进制能跑，证明不了产品在设备上能工作。
+QEMU proves the ARM binary runs; it does not prove the product works on the device.
 
-- [ ] 设备借出 / 归还 API：按标签从设备池里借一台并加锁，带超时自动归还
-- [ ] 测试前健康检查：开机、网络、版本接口；失败记为**基础设施失败**，不算测试失败
-- [ ] 刷写固件 / 部署构建产物；无论测试成功还是失败，归还时都恢复到已知良好的镜像
-- [ ] 设备自愈：BMC 或 **PDU 断电重启**（没有 BMC 的设备也能硬重启），连续两次健康检查失败自动隔离
-- [ ] CI 集成：Bamboo、Bitbucket Pipelines、GitHub Actions 的 job 通过同一个 API 借设备
-- [ ] 与 BuildPulse 打通：测试结果写进 `report.json`，环境信息带设备 ID 和固件版本，失败走 `buildpulse triage`
-- [ ] 测试台看板：设备利用率、排队时长、失败原因分布（代码 / 设备 / 网络），不稳定测试单独跟踪
+- [ ] Device checkout / return API: borrow a device from a pool by label and lock it, with timeout-based auto-return
+- [ ] Pre-test health check (boot, network, version endpoint); a failure is recorded as an **infrastructure failure**, not a test failure
+- [ ] Flash firmware / deploy build artifacts; on return, always restore the known-good image, whether the tests passed or failed
+- [ ] Self-healing devices: power-cycle through the BMC or a **PDU** (so devices without a BMC can still be hard-reset); quarantine a device after two failed health checks
+- [ ] CI integration: Bamboo, Bitbucket Pipelines and GitHub Actions jobs borrow devices through the same API
+- [ ] BuildPulse integration: test results go into `report.json` with device ID and firmware version in the environment; failures go through `buildpulse triage`
+- [ ] Rig dashboard: device utilisation, queue time, failure causes (code / device / network); flaky tests tracked separately
 
-### M3 告警与值班
+### M3 Alerting & on-call
 
-- [ ] 通知渠道（可插拔，每个渠道一个适配器）：
-  - **Slack**（主渠道）：带操作按钮，可直接确认、静默、隔离设备，告警消息带执行记录链接和失败摘要
-  - **Microsoft Teams**：Incoming Webhook / Workflows
-  - **WhatsApp**：Meta WhatsApp Cloud API 或 Twilio，用于非工作时间的值班通知
-  - **短信**：Twilio，作为最后的兜底（iMessage 没有公开的发送 API，所以用短信覆盖手机）
-  - **PagerDuty / Opsgenie**：值班轮换与升级；另有邮件、通用 Webhook
-- [ ] 路由规则：按环境层级（dev / test / rnd / staging / prod）和严重程度分发，例如构建机磁盘满 → Slack 频道；设备池可用率低于阈值 → 值班人 WhatsApp
-- [ ] 去重、聚合、静默窗口、恢复通知，防止告警风暴
-- [ ] `/metrics` 导出 Prometheus 指标，提供 Grafana 面板；历史趋势与可用率报表
+- [ ] Notification channels (pluggable, one adapter per channel):
+  - **Slack** (primary): actionable buttons to acknowledge, silence or quarantine a device; messages link to the run and include a failure summary
+  - **Microsoft Teams**: Incoming Webhooks / Workflows
+  - **WhatsApp**: Meta WhatsApp Cloud API or Twilio, for after-hours on-call
+  - **SMS**: Twilio as the last-resort fallback (iMessage has no public sending API, so SMS covers phones)
+  - **PagerDuty / Opsgenie**: on-call rotations and escalation; plus email and generic webhooks
+- [ ] Routing rules by environment tier (dev / test / rnd / staging / prod) and severity, e.g. build machine disk full → Slack channel; device pool availability below threshold → on-call engineer via WhatsApp
+- [ ] Deduplication, grouping, silence windows and recovery notifications to prevent alert storms
+- [ ] Prometheus metrics at `/metrics` with Grafana dashboards; historical trends and availability reports
 
-### M4 构建机群容量与速度
+### M4 Build farm capacity & speed
 
-- [ ] 构建 agent 用 IaC 管理，按需扩缩临时 Docker 构建 agent
-- [ ] 读取 BuildPulse 的 `report.json`，统计各阶段耗时、缓存命中率、排队时间
-- [ ] 远端缓存服务（Conan 远端、sccache）的容量和命中率监控，所有 runner 一启动就是热缓存
-- [ ] 找出最慢的流水线和阶段，给出优化建议
+- [ ] Build agents managed as IaC, scaling ephemeral Docker build agents on demand
+- [ ] Ingest BuildPulse `report.json` files to track per-stage timings, cache hit rates and queue times
+- [ ] Monitor capacity and hit rate of the remote cache services (Conan remote, sccache) so every runner starts warm
+- [ ] Surface the slowest pipelines and stages, with optimisation suggestions
 
-### M5 安全、合规与 GitOps
+### M5 Security, compliance & GitOps
 
-- [ ] IaC 放进 Bitbucket / GitHub：提 PR 自动出 plan 评论，合并后自动 apply
-- [ ] 单点登录（OIDC / LDAP）、按环境的 RBAC、审计日志
-- [ ] 每台 Agent 独立令牌；密钥迁到 Vault 等密钥管理服务
-- [ ] **CRA 追溯**：记录每台设备当前的固件版本，并关联 BuildPulse 生成的该版本 SBOM；新 CVE 发布时能马上查出受影响的设备和版本，支撑 24 小时上报流程
-- [ ] 数据库切换到 PostgreSQL，多实例部署
+- [ ] IaC lives in Bitbucket / GitHub: a pull request posts the plan as a comment; merging applies it
+- [ ] Single sign-on (OIDC / LDAP), per-environment RBAC, audit log
+- [ ] Per-agent tokens; secrets moved to a secrets manager such as Vault
+- [ ] **CRA traceability**: record the firmware version currently on each device and link it to that version's SBOM from BuildPulse, so when a new CVE is published the affected devices and versions are known immediately, supporting the 24-hour reporting process
+- [ ] PostgreSQL and multi-instance deployment
 
-### M6 生产发布护栏
+### M6 Production release guardrails
 
-- [ ] 发布门禁：版本必须在设备测试台的全部产品系列上通过，才能进入发布
-- [ ] 分阶段发布：先发到一个内部产线工位（金丝雀），观察健康指标后再扩大
-- [ ] 健康指标异常时自动回滚到已知良好的固件
-- [ ] 生产环境的变更审批、变更窗口、独立权限和网络隔离
+- [ ] Release gate: a version must pass the device test rigs for every product family before it can ship
+- [ ] Staged rollout: ship to one internal production-line station first (canary), widen after watching health metrics
+- [ ] Automatic rollback to the known-good firmware when health metrics degrade
+- [ ] Change approval, change windows, separate permissions and network isolation for production
 
-## 上手指南：从演示到接入真实实验室（M1）
+## Getting started: from demo to a real lab (M1)
 
-下面以开发环境为例；设备池、构建机、runner 按同样的方式写进 IaC。
+The steps below use the development environment as the example; device pools, build machines and runners
+go into IaC the same way. Work through them in order; each step has a check you can verify.
 
-按顺序做，每一步都有可验证的结果。
-
-**第 1 步：准备运行环境**（需要 Python 3.11+）
+**Step 1: Set up** (Python 3.11+)
 
 ```bash
 git clone https://github.com/jzoscar/LabForge.git && cd LabForge
@@ -308,73 +324,77 @@ pip install -e '.[dev,windows]'
 pytest
 ```
 
-✅ 看到测试全部通过。
+✅ All tests pass.
 
-**第 2 步：跑通本机演示**，熟悉界面（见上方“快速开始”）。
+**Step 2: Run the local demo** to get familiar with the console (see Quick start above).
 
-✅ 浏览器里能看到 `this-mac` 正常、`offline-board` 故障。
+✅ The browser shows `this-mac` up and `offline-board` down.
 
-**第 3 步：盘点设备，填写 IaC。** 先只做开发环境，编辑 `infra/dev.yaml`：
+**Step 3: Inventory your devices and write the IaC.** Start with the development environment only, in
+`infra/dev.yaml`:
 
-- `networks`：实验室网段和各子网（管理网 / ARM 网段 / Windows 网段 / 服务网段）
-- `hosts`：每台设备一条，写清 `platform.os` / `platform.arch`、`address`，有 BMC 的写 `bmc`，以及 `connection`
-- 暂时用不上的部分（负载均衡、容器）可以先删掉，之后再加
+- `networks`: the lab address ranges and subnets (management / ARM / Windows / services)
+- `hosts`: one entry per machine, with `platform.os` / `platform.arch`, `address`, a `bmc` block where
+  there is one, and `connection`
+- Remove what you do not need yet (load balancers, containers) and add it back later
 
 ```bash
 labforge validate infra/dev.yaml
 ```
 
-✅ 输出 `✓ dev [dev]: ...`，没有报错。
+✅ Prints `✓ dev [dev]: ...` with no errors.
 
-**第 4 步：配置密钥**（写在服务器的环境变量或 `.env` 里，不要写进 IaC 文件或提交到 git）
+**Step 4: Configure secrets** in the server's environment or a `.env` file; never put them in IaC files
+or commit them to git.
 
 ```bash
-export LABFORGE_SECRET_BMC_DEFAULT='admin:你的BMC密码'
+export LABFORGE_SECRET_BMC_DEFAULT='admin:<bmc-password>'
 export LABFORGE_SECRET_LAB_SSH_KEY="$HOME/.ssh/lab_ed25519"
-export LABFORGE_SECRET_WIN_ADMIN='你的Windows管理员密码'
+export LABFORGE_SECRET_WIN_ADMIN='<windows-admin-password>'
 ```
 
-**第 5 步：预演**
+**Step 5: Rehearse**
 
 ```bash
 labforge plan infra/dev.yaml
 labforge apply infra/dev.yaml --dry-run
 ```
 
-✅ 逐条检查将要执行的 ssh / ipmitool / winrm / docker 命令是否符合预期。
+✅ Every ssh / ipmitool / winrm / docker command listed is what you expect.
 
-**第 6 步：部署平台服务**到实验室里一台能访问所有设备和 BMC 的常驻服务器：
+**Step 6: Deploy the platform** on an always-on lab server that can reach every device and BMC:
 
 ```bash
-export LABFORGE_API_TOKEN=$(openssl rand -hex 24)   # 记下来，Agent 要用
+export LABFORGE_API_TOKEN=$(openssl rand -hex 24)   # keep it; the agents need it
 export LABFORGE_IAC_PATH=infra
 export LABFORGE_DB_URL=sqlite:////var/lib/labforge/labforge.db
 labforge serve --host 0.0.0.0 --port 8000
 ```
 
-或者用容器：`docker build -t labforge . && docker run -d -p 8000:8000 -v labforge-data:/data -e LABFORGE_API_TOKEN=... labforge`
+Or as a container: `docker build -t labforge . && docker run -d -p 8000:8000 -v labforge-data:/data -e LABFORGE_API_TOKEN=... labforge`
 
-✅ 实验室内其它机器能打开 `http://<服务器>:8000`。
+✅ Other machines in the lab can open `http://<server>:8000`.
 
-**第 7 步：在每台 ARM 板和 Windows 机上装 Agent**（见上方“部署 Agent”），`--name` 必须和 IaC 中的主机名一致。
+**Step 7: Install the agent on every ARM board and Windows machine** (see Deploying the agent);
+`--name` must match the host name in the IaC.
 
-✅ 总览页里每台主机的 CPU / 内存 / 磁盘有数据，“Agent”列显示几秒前。
+✅ Every host on the overview shows CPU / memory / disk, and its agent column shows a report from a few seconds ago.
 
-**第 8 步：真实执行**
+**Step 8: Apply for real**
 
 ```bash
 labforge apply infra/dev.yaml
 ```
 
-✅ 执行记录显示 success，`labforge state` 列出全部资源。
+✅ The run shows success, and `labforge state` lists every resource.
 
-**第 9 步：验收与排障。** 观察一周，总览页中 dev 全部“正常”。如果出现：
+**Step 9: Accept and troubleshoot.** Watch it for a week; every dev resource should be up. If you see:
 
-| 现象 | 处理 |
+| Symptom | Fix |
 |---|---|
-| BMC 列显示“no BMC credentials” | 检查 `LABFORGE_SECRET_*` 是否在 **服务进程** 的环境变量里 |
-| 漂移：`arch aarch64 != spec amd64` | 设备实际架构与 IaC 不符，修正 IaC 或排查设备 |
-| Agent “无上报” / 失联 | 检查 `--server` 地址、令牌、防火墙 8000 端口 |
-| ping 不通但服务正常 | 设备禁 ICMP，把 `monitor.probes` 改成 `tcp` 探针 |
+| BMC column says "no BMC credentials" | Check that `LABFORGE_SECRET_*` is set in the **server process's** environment |
+| Drift: `arch aarch64 != spec amd64` | The device's real architecture differs from the IaC; fix the IaC or investigate the device |
+| Agent shows no reports / lost | Check the `--server` address, the token, and the firewall on port 8000 |
+| Ping fails but the service works | The device blocks ICMP; switch `monitor.probes` to a `tcp` probe |
 
-**第 10 步：扩展**到 `infra/rnd.yaml`、`infra/staging.yaml`，然后进入 M2。
+**Step 10: Expand** to `infra/rnd.yaml` and `infra/staging.yaml`, then move on to M2.
