@@ -197,3 +197,30 @@ class BuildRun(SQLModel, table=True):
     @property
     def cache(self) -> dict:
         return json.loads(self.cache_json or "{}")
+
+
+class ApiToken(SQLModel, table=True):
+    """A named API token. Only a hash is stored; the token is shown once when created."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    token_hash: str = Field(index=True)
+    prefix: str = ""  # first characters, to recognise a token without storing it
+    role: str = "viewer"  # viewer | operator | editor | admin | agent
+    envs: str = "*"  # comma-separated environment globs this token may change
+    subject: str | None = None  # agent tokens: the host address it may report as (glob)
+    created_at: datetime = Field(default_factory=utcnow)
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class AuditEvent(SQLModel, table=True):
+    """Who changed what: applies, IaC edits, rig operations, alert handling, tokens."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    ts: datetime = Field(default_factory=utcnow, index=True)
+    actor: str
+    action: str = Field(index=True)  # e.g. iac.save, apply.start, rig.checkout, token.create
+    target: str = ""
+    detail: str = ""
+    source: str = ""  # web | api | cli

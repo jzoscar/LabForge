@@ -437,3 +437,27 @@ class AlertPolicyDoc(Model):
         if errors:
             raise ValueError("; ".join(errors))
         return self
+
+
+# --- access policy --------------------------------------------------------------
+
+Role = Literal["viewer", "operator", "editor", "admin"]
+
+
+class Binding(Model):
+    """Grant a role to SSO users and groups ("alice@example.com", "group:lab-admins")."""
+
+    subjects: list[str] = Field(min_length=1)
+    role: Role
+    envs: list[str] = ["*"]  # environment globs the role applies to (for changes)
+
+
+class AccessPolicySpec(Model):
+    bindings: list[Binding] = []
+
+
+class AccessPolicyDoc(Model):
+    api_version: Literal["labforge/v1"]
+    kind: Literal["AccessPolicy"]
+    metadata: Metadata
+    spec: AccessPolicySpec = AccessPolicySpec()

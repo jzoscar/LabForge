@@ -19,8 +19,11 @@
     <a href="/builds" class="{{ 'on' if nav == 'builds' }}">Builds</a>
     <a href="/iac" class="{{ 'on' if nav == 'iac' }}">IaC</a>
     <a href="/runs" class="{{ 'on' if nav == 'runs' }}">Runs</a>
+    <a href="/audit" class="{{ 'on' if nav == 'audit' }}">Audit</a>
     <a href="/docs">API</a>
   </nav>
+  {% set who = signed_in(request) %}
+  {% if who %}<span class="who" title="{{ who.envs|join(', ') }}">{{ who.name }} · {{ who.role }}</span>{% endif %}
 </header>
 <main>
 {% block content %}{% endblock %}

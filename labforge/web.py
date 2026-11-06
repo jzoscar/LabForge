@@ -58,6 +58,19 @@ def until(dt: datetime | None) -> str:
     return f"in {s // 60}m" if s < 3600 else f"in {s // 3600}h {s % 3600 // 60}m"
 
 
+def _signed_in(request: Request):
+    from fastapi import HTTPException as _HTTPException
+
+    from labforge.auth import web_principal
+
+    try:
+        who = web_principal(request)
+    except _HTTPException:
+        return None
+    return who if who.via == "sso" else None
+
+
+templates.env.globals["signed_in"] = _signed_in
 templates.env.filters["ago"] = ago
 templates.env.filters["until"] = until
 templates.env.globals.update(STATUS_LABEL=STATUS_LABEL, KIND_LABEL=KIND_LABEL, TIER_LABEL=TIER_LABEL)
@@ -176,6 +189,19 @@ def resource_detail(address: str, request: Request, session: Session = Depends(g
         "spec_yaml": yaml.safe_dump(st.spec, sort_keys=False, allow_unicode=True),
         "outputs_yaml": yaml.safe_dump(st.outputs, sort_keys=False, allow_unicode=True),
     })
+
+
+@router.get("/audit", response_class=HTMLResponse)
+def audit_page(request: Request, action: str = "", actor: str = "", session: Session = Depends(get_session)):
+    from labforge.models import AuditEvent
+
+    q = select(AuditEvent).order_by(AuditEvent.id.desc()).limit(300)
+    if action:
+        q = q.where(AuditEvent.action.startswith(action))
+    if actor:
+        q = q.where(AuditEvent.actor == actor)
+    return templates.TemplateResponse(request, "audit.html", {
+        "nav": "audit", "rows": list(session.exec(q)), "f": {"action": action, "actor": actor}})
 
 
 @router.get("/runs", response_class=HTMLResponse)

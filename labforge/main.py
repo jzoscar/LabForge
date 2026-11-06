@@ -47,4 +47,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(builds_router)
     app.include_router(metrics_router)
     app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+
+    @app.middleware("http")
+    async def sso_gate(request, call_next):
+        # Behind an SSO proxy every page needs a signed-in user; the API and /metrics use tokens.
+        path = request.url.path
+        if settings.auth_header and not path.startswith(("/api/", "/static/", "/metrics", "/docs", "/openapi")) \
+                and not request.headers.get(settings.auth_header):
+            from fastapi.responses import PlainTextResponse
+
+            return PlainTextResponse("Sign in through the SSO proxy.", status_code=401)
+        return await call_next(request)
     return app

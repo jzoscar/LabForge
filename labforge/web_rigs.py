@@ -9,14 +9,16 @@ from sqlmodel import Session, select
 from labforge import rigs
 from labforge.api import get_session
 from labforge.models import Lease, ResourceState
+from labforge.auth import Principal, audit, web_require
 from labforge.web import templates
 
 router = APIRouter(prefix="/rigs", include_in_schema=False)
 
 
-def _require_edit(request: Request) -> None:
+def _require_edit(request: Request) -> Principal:
     if not request.app.state.settings.ui_edit:
         raise HTTPException(403, "changing rigs from the web UI is disabled (LABFORGE_UI_EDIT=0)")
+    return web_require(request, "operator")
 
 
 @router.get("", response_class=HTMLResponse)
@@ -43,32 +45,35 @@ def _back(message: str = "", error: str = "") -> RedirectResponse:
 
 @router.post("/checkout")
 def checkout(request: Request, pool: str = Form(...), holder: str = Form(...), ttl_minutes: int = Form(30)):
-    _require_edit(request)
+    who = _require_edit(request)
     try:
         lease = rigs.checkout(request.app.state.engine, pool, holder, ttl_seconds=ttl_minutes * 60,
                               purpose="manual checkout from the web UI")
     except rigs.RigError as e:
         tried = "; ".join(f"{t['device']}: {t['reason']}" for t in e.detail.get("tried", []))
         return _back(error=e.detail["error"] + (f" (tried {tried})" if tried else ""))
+    audit(request.app.state.engine, who, "rig.checkout", lease["address"], f"lease {lease['leaseId']} to {holder}")
     healed = f" - {lease['note']}" if lease["note"] else ""
     return _back(message=f"Lease #{lease['leaseId']}: {lease['device']} checked out to {lease['holder']}{healed}")
 
 
 @router.post("/release")
 def release(request: Request, lease_id: int = Form(...), result: str = Form("passed")):
-    _require_edit(request)
+    who = _require_edit(request)
     try:
         lease = rigs.release(request.app.state.engine, lease_id, result)
     except rigs.RigError as e:
         return _back(error=e.detail["error"])
+    audit(request.app.state.engine, who, "rig.release", lease["address"], f"lease {lease_id}: {result}")
     return _back(message=f"Lease #{lease_id} released ({result}): {lease['note']}")
 
 
 @router.post("/unquarantine")
 def unquarantine(request: Request, address: str = Form(...)):
-    _require_edit(request)
+    who = _require_edit(request)
     try:
         rigs.unquarantine(request.app.state.engine, address)
     except rigs.RigError as e:
         return _back(error=e.detail["error"])
+    audit(request.app.state.engine, who, "rig.unquarantine", address)
     return _back(message=f"{address} is back in the pool")

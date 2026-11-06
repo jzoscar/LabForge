@@ -13,10 +13,11 @@ from sqlmodel import Session, select
 from labforge import service
 from labforge.api import get_session
 from labforge.iac.inspect import describe, json_schema, schema_reference
-from labforge.iac.loader import Diagnostic, LoadError, parse_text
+from labforge.iac.loader import Diagnostic, LoadError, load_path, parse_text
 from labforge.iac.planner import build_plan
 from labforge.iac.workspace import Workspace, WorkspaceError
 from labforge.models import ResourceState
+from labforge.auth import Principal, audit, require_envs, web_require
 from labforge.web import templates
 
 router = APIRouter(prefix="/iac", include_in_schema=False)
@@ -33,9 +34,10 @@ def _ws(request: Request) -> Workspace:
     return request.app.state.settings.workspace()
 
 
-def _require_edit(request: Request) -> None:
+def _require_edit(request: Request) -> Principal:
     if not request.app.state.settings.ui_edit:
         raise HTTPException(403, "editing IaC from the web UI is disabled (LABFORGE_UI_EDIT=0)")
+    return web_require(request, "editor")
 
 
 def _diag_json(d: Diagnostic) -> dict:
@@ -189,11 +191,12 @@ def check(req: CheckRequest, request: Request, session: Session = Depends(get_se
 
 @router.post("/save")
 def save(req: SaveRequest, request: Request) -> JSONResponse:
-    _require_edit(request)
+    who = _require_edit(request)
     try:
         digest = _ws(request).write(req.path, req.text, req.base)
     except WorkspaceError as e:
         return JSONResponse({"error": str(e)}, status_code=e.status)
+    audit(request.app.state.engine, who, "iac.save", req.path)
     _, diags = parse_text(req.text, req.path)
     return JSONResponse({"digest": digest, "problems": len(diags)})
 
@@ -220,7 +223,7 @@ def revision(request: Request, path: str, id: str) -> JSONResponse:
 
 @router.post("/new")
 def new_file(request: Request, name: str = Form(...), env: str = Form(""), starter: str = Form("blank")):
-    _require_edit(request)
+    who = _require_edit(request)
     if starter not in STARTERS:
         raise HTTPException(400, "unknown starter")
     rel = name.strip()
@@ -232,17 +235,19 @@ def new_file(request: Request, name: str = Form(...), env: str = Form(""), start
         _ws(request).write(rel, text, create=True)
     except WorkspaceError as e:
         raise HTTPException(e.status, str(e)) from e
+    audit(request.app.state.engine, who, "iac.create", rel, f"starter {starter}")
     return RedirectResponse(f"/iac/edit?path={rel}", status_code=303)
 
 
 @router.post("/import", response_class=HTMLResponse)
 async def import_files(request: Request, files: list[UploadFile] = File(...), overwrite: bool = Form(False),
                        session: Session = Depends(get_session)):
-    _require_edit(request)
+    who = _require_edit(request)
     ws = _ws(request)
     results = []
     for upload in files:
         results += ws.import_upload(upload.filename or "upload.yaml", await upload.read(), overwrite)
+    audit(request.app.state.engine, who, "iac.import", ", ".join(f"{r.path}:{r.status}" for r in results))
     return _render_workspace(request, session, import_results=results)
 
 
@@ -265,11 +270,12 @@ def download(request: Request, path: str) -> Response:
 
 @router.post("/delete")
 def delete(request: Request, path: str = Form(...)):
-    _require_edit(request)
+    who = _require_edit(request)
     try:
         _ws(request).delete(path)
     except WorkspaceError as e:
         raise HTTPException(e.status, str(e)) from e
+    audit(request.app.state.engine, who, "iac.delete", path)
     return RedirectResponse("/iac", status_code=303)
 
 
@@ -278,11 +284,17 @@ def apply(request: Request, dry_run: bool = Form(False), allow_prod: bool = Form
     settings = request.app.state.settings
     if not dry_run and not settings.ui_apply:
         raise HTTPException(403, "real apply from the UI is disabled; set LABFORGE_UI_APPLY=1 or use the CLI")
+    who = web_require(request, "operator" if dry_run else "admin")
     ws = _ws(request)
     try:
         target = ws.resolve(path) if path else ws.root
     except WorkspaceError as e:
         raise HTTPException(e.status, str(e)) from e
+    try:
+        require_envs(who, [d.metadata.name for d in load_path(target)])
+    except LoadError:
+        pass  # the run reports the problems
+    audit(request.app.state.engine, who, "apply.start", path or "workspace", f"dry_run={dry_run}")
     run_id = service.start_run_background(request.app.state.engine, settings, target, dry_run=dry_run,
                                           allow_prod=allow_prod, source=f"web:{path or 'workspace'}")
     return RedirectResponse(f"/runs/{run_id}", status_code=303)

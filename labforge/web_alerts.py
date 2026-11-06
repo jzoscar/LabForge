@@ -15,14 +15,16 @@ from labforge.iac.loader import load_policies
 from labforge.iac.secrets import SecretResolver
 from labforge.models import Alert, NotificationLog, Silence, utcnow
 from labforge.notify import ChannelError, Item, Notification, send
+from labforge.auth import Principal, audit, web_require
 from labforge.web import templates
 
 router = APIRouter(prefix="/alerts", include_in_schema=False)
 
 
-def _require_edit(request: Request) -> None:
+def _require_edit(request: Request) -> Principal:
     if not request.app.state.settings.ui_edit:
         raise HTTPException(403, "changing alerts from the web UI is disabled (LABFORGE_UI_EDIT=0)")
+    return web_require(request, "operator")
 
 
 def _back(message: str = "", error: str = "") -> RedirectResponse:
@@ -56,20 +58,22 @@ def _configured(channel, secrets: SecretResolver) -> bool:
 
 @router.post("/ack")
 def ack(request: Request, alert_id: int = Form(...), who: str = Form("web")):
-    _require_edit(request)
+    principal = _require_edit(request)
     with _session(request) as session:
         try:
-            a = alerting.acknowledge(session, alert_id, who or "web")
+            a = alerting.acknowledge(session, alert_id, principal.name if principal.via == "sso" else (who or "web"))
         except LookupError as e:
             return _back(error=str(e))
+        audit(request.app.state.engine, principal, "alert.ack", a.subject)
         return _back(message=f"{a.subject} acknowledged")
 
 
 @router.post("/silence")
 def silence(request: Request, matcher: str = Form(...), minutes: int = Form(60), reason: str = Form("")):
-    _require_edit(request)
+    principal = _require_edit(request)
     with _session(request) as session:
-        s = alerting.silence(session, matcher.strip(), minutes, reason, "web")
+        s = alerting.silence(session, matcher.strip(), minutes, reason, principal.name)
+        audit(request.app.state.engine, principal, "alert.silence", s.matcher, f"{minutes} min: {reason}")
         return _back(message=f"Silenced {s.matcher} for {minutes} min")
 
 

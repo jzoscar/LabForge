@@ -15,7 +15,7 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
-from labforge.iac.spec import AlertPolicyDoc, EnvironmentDoc
+from labforge.iac.spec import AccessPolicyDoc, AlertPolicyDoc, EnvironmentDoc
 
 _VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 # Cross-reference errors name the offending resource: "host arm1: unknown subnet ..."
@@ -102,7 +102,7 @@ def _messages(err: dict) -> list[str]:
     return [m for m in msg.split("; ") if m] if err["type"] == "value_error" else [msg]
 
 
-KINDS = {"Environment": EnvironmentDoc, "AlertPolicy": AlertPolicyDoc}
+KINDS = {"Environment": EnvironmentDoc, "AlertPolicy": AlertPolicyDoc, "AccessPolicy": AccessPolicyDoc}
 
 
 def parse_text(text: str, source: str = "<buffer>",
@@ -113,8 +113,8 @@ def parse_text(text: str, source: str = "<buffer>",
 
 
 def parse_documents(text: str, source: str = "<buffer>", environ: Mapping[str, str] | None = None
-                    ) -> tuple[list[EnvironmentDoc | AlertPolicyDoc], list[Diagnostic]]:
-    """Parse one YAML file into documents of every kind (Environment, AlertPolicy)."""
+                    ) -> tuple[list[EnvironmentDoc | AlertPolicyDoc | AccessPolicyDoc], list[Diagnostic]]:
+    """Parse one YAML file into documents of every kind (Environment, AlertPolicy, AccessPolicy)."""
     environ = os.environ if environ is None else environ
     text, missing = interpolate(text, environ)
     diags: list[Diagnostic] = []
@@ -129,7 +129,7 @@ def parse_documents(text: str, source: str = "<buffer>", environ: Mapping[str, s
         problem = getattr(e, "problem", None) or str(e)
         return [], diags + [Diagnostic(source, mark.line + 1 if mark else None, f"invalid YAML: {problem}")]
 
-    docs: list[EnvironmentDoc | AlertPolicyDoc] = []
+    docs: list[EnvironmentDoc | AlertPolicyDoc | AccessPolicyDoc] = []
     for node, raw in zip(nodes, raws):
         if raw is None or node is None:
             continue
@@ -180,11 +180,19 @@ def load_path(path: str | Path, environ: Mapping[str, str] | None = None) -> lis
     return docs
 
 
-def load_policies(path: str | Path, environ: Mapping[str, str] | None = None) -> list[AlertPolicyDoc]:
-    """AlertPolicy documents in a workspace; invalid files are skipped (they show up as problems)."""
+def load_kind(path: str | Path, kind: type, environ: Mapping[str, str] | None = None) -> list:
+    """Documents of one kind in a workspace; invalid files are skipped (they show up as problems)."""
     path = Path(path)
-    out: list[AlertPolicyDoc] = []
+    out = []
     for f in iac_files(path) if path.exists() else []:
         docs, _ = parse_documents(f.read_text(encoding="utf-8"), str(f), environ)
-        out += [d for d in docs if isinstance(d, AlertPolicyDoc)]
+        out += [d for d in docs if isinstance(d, kind)]
     return out
+
+
+def load_policies(path: str | Path, environ: Mapping[str, str] | None = None) -> list[AlertPolicyDoc]:
+    return load_kind(path, AlertPolicyDoc, environ)
+
+
+def load_access(path: str | Path, environ: Mapping[str, str] | None = None) -> list[AccessPolicyDoc]:
+    return load_kind(path, AccessPolicyDoc, environ)

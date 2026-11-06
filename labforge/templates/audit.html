@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Audit log{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Audit log</h1><span class="muted">Who changed what: applies, IaC edits, rigs, alerts, tokens</span></div>
+<form class="filters" method="get">
+  <input name="action" value="{{ f.action }}" placeholder="action prefix, e.g. apply or rig.">
+  <input name="actor" value="{{ f.actor }}" placeholder="actor">
+  <button>Filter</button>
+</form>
+<section class="card">
+<table>
+  <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>Details</th><th>Via</th></tr></thead>
+  <tbody>
+  {% for e in rows %}
+  <tr>
+    <td class="sub nowrap" title="{{ e.ts }}">{{ e.ts|ago }}</td>
+    <td class="mono">{{ e.actor }}</td>
+    <td class="mono">{{ e.action }}</td>
+    <td class="mono sub">{{ e.target }}</td>
+    <td class="sub">{{ e.detail|truncate(120) }}</td>
+    <td class="sub">{{ e.source }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="muted">Nothing recorded yet</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</section>
+{% endblock %}

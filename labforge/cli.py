@@ -100,7 +100,10 @@ def _run(path: Path, *, dry_run: bool, allow_prod: bool, yes: bool, destroy_envs
     if not dry_run and not yes:
         typer.confirm("\nApply these changes?", abort=True)
 
+    from labforge.auth import audit, cli_actor
+
     action = "destroy" if destroy_envs else "apply"
+    audit(engine, cli_actor(), f"{action}.start", str(path), f"dry_run={dry_run}", "cli")
     run_id = service.create_run(engine, f"cli:{path}", dry_run, action)
     typer.echo("")
     run = service.execute_run(engine, settings, run_id, path, dry_run=dry_run, allow_prod=allow_prod,
@@ -373,6 +376,55 @@ def builds_stats(days: int = typer.Option(30, "--days"), server: str = ServerOpt
                    f"  p90 {p['p90Seconds']:>6.1f}s  cache hits {hit}")
     for s in data["suggestions"]:
         typer.echo(f"[{s['severity']}] {s['pipeline']}: {s['text']}")
+
+
+token_app = typer.Typer(help="API tokens (run on the LabForge server; writes its database directly).",
+                        no_args_is_help=True)
+app.add_typer(token_app, name="token")
+
+
+@token_app.command("create")
+def token_create(name: str, role: str = typer.Option("viewer", "--role", help="viewer|operator|editor|admin|agent"),
+                 envs: str = typer.Option("*", "--envs", help="comma-separated environment globs it may change"),
+                 subject: str | None = typer.Option(None, "--subject", help="agent tokens: host address, e.g. dev.host.arm-1")
+                 ) -> None:
+    """Create a token. It is printed once; only its hash is stored."""
+    from labforge.auth import audit, cli_actor, create_token
+
+    engine = make_engine(_settings().db_url)
+    try:
+        token = create_token(engine, name, role, envs.split(","), subject)
+    except ValueError as e:
+        typer.secho(str(e), fg="red", err=True)
+        raise typer.Exit(1) from e
+    audit(engine, cli_actor(), "token.create", name, f"role={role} envs={envs}", "cli")
+    typer.echo(token)
+    typer.secho("Store it now: it cannot be shown again.", fg="yellow", err=True)
+
+
+@token_app.command("list")
+def token_list() -> None:
+    from labforge.models import ApiToken
+
+    with Session(make_engine(_settings().db_url)) as s:
+        for t in s.exec(select(ApiToken).order_by(ApiToken.name)):
+            state = "revoked" if t.revoked_at else (f"used {t.last_used_at:%Y-%m-%d %H:%M}" if t.last_used_at else "never used")
+            typer.echo(f"{t.name:<24} {t.prefix}…  {t.role:<9} envs={t.envs}"
+                       + (f" subject={t.subject}" if t.subject else "") + f"  {state}")
+
+
+@token_app.command("revoke")
+def token_revoke(name: str) -> None:
+    from labforge.auth import audit, cli_actor, revoke_token
+
+    engine = make_engine(_settings().db_url)
+    try:
+        revoke_token(engine, name)
+    except LookupError as e:
+        typer.secho(str(e), fg="red", err=True)
+        raise typer.Exit(1) from e
+    audit(engine, cli_actor(), "token.revoke", name, "", "cli")
+    typer.echo(f"{name} revoked")
 
 
 @app.command()

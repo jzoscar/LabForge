@@ -36,6 +36,11 @@ class Settings:
     public_url: str = "http://127.0.0.1:8000"
     # Verifies Slack button clicks (Slack app "Signing Secret").
     slack_signing_secret: str | None = None
+    # Web UI behind an SSO proxy (oauth2-proxy, Authentik, ...): the header carrying the signed-in
+    # user, and optionally their groups. Unset = the web UI is open (lab-internal / development).
+    auth_header: str | None = None
+    groups_header: str | None = None
+    sso_default_role: str = "viewer"
 
     def workspace(self) -> Workspace:
         from labforge.iac.workspace import Workspace
@@ -59,4 +64,7 @@ class Settings:
             ui_edit=_bool("LABFORGE_UI_EDIT", cls.ui_edit),
             public_url=os.getenv("LABFORGE_PUBLIC_URL", cls.public_url).rstrip("/"),
             slack_signing_secret=os.getenv("LABFORGE_SLACK_SIGNING_SECRET") or None,
+            auth_header=os.getenv("LABFORGE_AUTH_HEADER") or None,
+            groups_header=os.getenv("LABFORGE_GROUPS_HEADER") or None,
+            sso_default_role=os.getenv("LABFORGE_SSO_DEFAULT_ROLE", cls.sso_default_role),
         )
