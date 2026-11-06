@@ -11,6 +11,8 @@ Each device serves:
 A control API injects faults:
   http://127.0.0.1:<control_port>/sim                       GET   device states
   http://127.0.0.1:<control_port>/sim/devices/<name>/fault  POST  {"fault": "crash|hang|overheat|none"}
+A switched PDU lives on the control port too (outlet N powers the Nth device):
+  http://127.0.0.1:<control_port>/pdu/outlets/<n>           POST  {"action": "on|off|cycle"}  (basic auth)
 
 Faults model what goes wrong on real rigs: "crash" (firmware dead, hardware fine - a
 power cycle fixes it), "hang" (device stops answering in time - a power cycle fixes it),
@@ -207,6 +209,25 @@ class _BmcHandler(_Handler):
 class _ControlHandler(_Handler):
     sim: Simulator
 
+    def _pdu(self, outlet: str) -> None:
+        expected = "Basic " + base64.b64encode(self.sim.bmc_credentials.encode()).decode()
+        if self.headers.get("Authorization") != expected:
+            self._json(401, {"error": "unauthorized"})
+            return
+        devices = list(self.sim.devices.values())
+        if not outlet.isdigit() or not 1 <= int(outlet) <= len(devices):
+            self._json(404, {"error": f"no outlet {outlet}"})
+            return
+        device, action = devices[int(outlet) - 1], self._body().get("action")
+        if action == "off":
+            device.power = "Off"
+        elif action in ("on", "cycle"):
+            device.reboot()
+        else:
+            self._json(400, {"error": "action must be on, off or cycle"})
+            return
+        self._json(200, {"outlet": int(outlet), "device": device.spec.name, "power": device.power})
+
     def do_GET(self) -> None:
         if self.path == "/sim":
             self._json(200, {"devices": [d.state() for d in self.sim.devices.values()]})
@@ -215,6 +236,9 @@ class _ControlHandler(_Handler):
 
     def do_POST(self) -> None:
         parts = self.path.strip("/").split("/")
+        if len(parts) == 3 and parts[:2] == ["pdu", "outlets"]:
+            self._pdu(parts[2])
+            return
         if len(parts) == 4 and parts[:2] == ["sim", "devices"] and parts[3] == "fault":
             try:
                 self.sim.inject(parts[2], self._body().get("fault"))
@@ -269,6 +293,7 @@ class Simulator:
 
 
 def default_devices(count: int = 3, base_port: int = 9100) -> list[DeviceSpec]:
-    """sim-sensor-01 -> http 9111 / bmc 9112, sim-sensor-02 -> 9121 / 9122, ..."""
+    """sim-sensor-01 -> http 9111 / bmc 9112, sim-sensor-02 -> 9121 / 9122, ...
+    The default 4th device is a budget board: declared in IaC without a BMC, reset through PDU outlet 4."""
     return [DeviceSpec(f"sim-sensor-{i:02d}", base_port + i * 10 + 1, base_port + i * 10 + 2)
             for i in range(1, count + 1)]

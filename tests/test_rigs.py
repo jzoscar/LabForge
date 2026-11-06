@@ -29,9 +29,10 @@ def _free_port() -> int:
 def lab(tmp_path, monkeypatch, settings, engine):
     """Simulator on free ports + the sim-lab IaC rewritten to those ports, applied for real."""
     monkeypatch.setenv("LABFORGE_SECRET_SIM_BMC", "admin:admin")
-    specs = [DeviceSpec(f"sim-sensor-0{i}", _free_port(), _free_port()) for i in (1, 2, 3)]
-    sim = Simulator(specs, _free_port(), boot_seconds=0.3).start()
-    text = (ROOT / "infra" / "test" / "sim-lab.yaml").read_text()
+    specs = [DeviceSpec(f"sim-sensor-0{i}", _free_port(), _free_port()) for i in (1, 2, 3, 4)]
+    control = _free_port()
+    sim = Simulator(specs, control, boot_seconds=0.3).start()
+    text = (ROOT / "infra" / "test" / "sim-lab.yaml").read_text().replace("127.0.0.1:9100", f"127.0.0.1:{control}")
     for i, spec in enumerate(specs, 1):
         text = text.replace(f"91{i}1", str(spec.http_port)).replace(f"91{i}2", str(spec.bmc_port))
     iac = tmp_path / "sim-lab.yaml"
@@ -57,12 +58,12 @@ def test_simulator_faults_and_monitoring(lab, engine, settings):
 
 
 def test_checkout_until_pool_is_busy_then_release_restores(lab, engine):
-    leases = [rigs.checkout(engine, "sim-sensor", f"job-{i}") for i in range(3)]
-    assert sorted(lease["device"] for lease in leases) == ["sim-sensor-01", "sim-sensor-02", "sim-sensor-03"]
+    leases = [rigs.checkout(engine, "sim-sensor", f"job-{i}") for i in range(4)]
+    assert sorted(lease["device"] for lease in leases) == [f"sim-sensor-0{i}" for i in (1, 2, 3, 4)]
     assert leases[0]["endpoints"]["http"].startswith("http://127.0.0.1:")
     with pytest.raises(rigs.RigError) as e:
         rigs.checkout(engine, "sim-sensor", "job-4")
-    assert e.value.status == 409 and e.value.detail["busy"] == 3
+    assert e.value.status == 409 and e.value.detail["busy"] == 4
 
     device = lab.devices[leases[0]["device"]]
     before = device.booted_at
@@ -74,9 +75,8 @@ def test_checkout_until_pool_is_busy_then_release_restores(lab, engine):
 
 
 def test_checkout_heals_crashed_device(lab, engine):
-    lab.inject("sim-sensor-01", "crash")
-    lab.inject("sim-sensor-02", "crash")
-    lab.inject("sim-sensor-03", "crash")
+    for name in lab.devices:
+        lab.inject(name, "crash")
     lease = rigs.checkout(engine, "sim-sensor", "job", heal_wait=5)
     assert "power-cycled via BMC" in lease["note"] and "healthy after recovery" in lease["note"]
     assert lab.devices[lease["device"]].fault is None
@@ -94,7 +94,7 @@ def test_overheated_device_is_quarantined_not_handed_out(lab, engine):
     assert all(t["quarantined"] for t in e.value.detail["tried"])  # reboot did not fix hardware
     with pytest.raises(rigs.RigError) as again:
         rigs.checkout(engine, "sim-sensor", "job", heal_wait=1)
-    assert again.value.detail["quarantined"] == 3 and again.value.detail["tried"] == []
+    assert again.value.detail["quarantined"] == 4 and again.value.detail["tried"] == []
 
     lab.inject("sim-sensor-01", "none")
     rigs.unquarantine(engine, "sim-lab.host.sim-sensor-01")
@@ -171,3 +171,37 @@ def test_flash_reports_a_device_that_never_comes_back(lab, engine):
     with pytest.raises(rigs.RigError) as e:
         rigs.flash(engine, lease["leaseId"], "2.0.0-slow", wait_seconds=1)
     assert e.value.status == 504 and "did not come back healthy" in e.value.detail["error"]
+
+
+def test_board_without_bmc_heals_through_the_pdu(lab, engine):
+    for name in ("sim-sensor-01", "sim-sensor-02", "sim-sensor-03"):
+        rigs.checkout(engine, "sim-sensor", f"hold-{name}")  # leave only the budget board free
+    lab.inject("sim-sensor-04", "crash")
+    lease = rigs.checkout(engine, "sim-sensor", "job", heal_wait=5)
+    assert lease["device"] == "sim-sensor-04" and "power-cycled via PDU outlet 4" in lease["note"]
+    released = rigs.release(engine, lease["leaseId"], "passed")
+    assert "restored: power-cycled via PDU outlet 4" in released["note"]
+
+
+def test_release_restores_known_good_firmware(lab, engine):
+    lease = rigs.checkout(engine, "sim-sensor", "job")
+    device = lab.devices[lease["device"]]
+    rigs.flash(engine, lease["leaseId"], "9.9.9-test", sha256="a" * 64, wait_seconds=10)
+    assert device.firmware == "9.9.9-test"
+    with Session(engine) as s:
+        assert s.get(Lease, lease["leaseId"]).firmware_version == "9.9.9-test"
+    released = rigs.release(engine, lease["leaseId"], "passed")
+    assert "restored known-good firmware 1.4.2" in released["note"] and device.firmware == "1.4.2"
+
+
+def test_trends_and_queue_time(lab, engine):
+    a = rigs.checkout(engine, "sim-sensor", "job-a", queued_seconds=42)
+    b = rigs.checkout(engine, "sim-sensor", "job-b")
+    rigs.release(engine, a["leaseId"], "passed")
+    rigs.release(engine, b["leaseId"], "infra-failed")
+    with Session(engine) as s:
+        [pool] = rigs.trends(s, days=7)
+    assert pool["pool"] == "sim-sensor" and pool["leases"] == 2
+    assert pool["results"] == {"failed": 0, "infra-failed": 1, "passed": 1} and pool["infraShare"] == 0.5
+    assert pool["avgWaitSeconds"] == 42 and set(pool["utilisation"]) == {f"sim-sensor-0{i}" for i in (1, 2, 3, 4)}
+    assert pool["heldSeconds"][a["device"]] > 0

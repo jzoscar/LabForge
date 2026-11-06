@@ -7,7 +7,9 @@ Rules (milestone 2):
   ("fix, don't just file"); if it is still unhealthy, the next device is tried.
 - Two consecutive failed health checks quarantine a device until a person clears it.
   Those failures are infrastructure failures, never test failures.
-- Returning a device power-cycles it back to a known-good state, whatever the result.
+- Returning a device puts it back to a known-good state, whatever the result: its known-good
+  firmware is flashed back if a test left another build on it, then it is power-cycled
+  (BMC, or the PDU outlet for boards without a BMC).
 - Leases expire, so a crashed CI job cannot hold a device forever.
 """
 
@@ -24,7 +26,7 @@ import httpx
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, select
 
-from labforge.iac.providers.bmc import power_cycle
+from labforge.iac.providers.bmc import hard_reset
 from labforge.iac.secrets import SecretResolver
 from labforge.iac.spec import Host
 from labforge.models import DeviceHealth, Event, Lease, ResourceState, utcnow
@@ -101,20 +103,17 @@ def _record(session: Session, state: ResourceState, healthy: bool, reason: str) 
 
 
 def _heal(state: ResourceState, secrets: SecretResolver, wait_seconds: float) -> tuple[Health | None, str]:
-    """Power-cycle through the BMC and wait for the device to come back healthy."""
-    host = Host.model_validate(state.spec)
-    if not host.bmc:
-        return None, "no BMC to power-cycle"
+    """Power-cycle (BMC, else PDU) and wait for the device to come back healthy."""
     try:
-        power_cycle(host.bmc, secrets)
-    except Exception as e:  # BMC unreachable or refused: still an infrastructure failure
+        how = hard_reset(Host.model_validate(state.spec), secrets)
+    except Exception as e:  # nothing to reset with, or the BMC/PDU refused: an infrastructure failure
         return None, f"power cycle failed: {e}"
     deadline = time.monotonic() + wait_seconds
     health = check(state, secrets)
     while not health.healthy and time.monotonic() < deadline:
         time.sleep(0.5)
         health = check(state, secrets)
-    return health, "power-cycled via BMC"
+    return health, how
 
 
 # --- checkout / release -----------------------------------------------------
@@ -138,12 +137,13 @@ def lease_view(lease: Lease, state: ResourceState | None) -> dict:
         "address": lease.address, "host": spec.get("address"), "endpoints": device_endpoints(spec),
         "platform": spec.get("platform"), "labels": spec.get("labels", {}),
         "acquiredAt": lease.acquired_at, "expiresAt": lease.expires_at, "releasedAt": lease.released_at,
-        "note": lease.note,
+        "queuedSeconds": lease.queued_seconds, "firmware": lease.firmware_version, "note": lease.note,
     }
 
 
 def checkout(engine: Engine, pool: str, holder: str, *, ttl_seconds: int = 1800, purpose: str = "",
-             secrets: SecretResolver | None = None, heal_wait: float = 15.0) -> dict:
+             secrets: SecretResolver | None = None, heal_wait: float = 15.0,
+             queued_seconds: float | None = None) -> dict:
     secrets = secrets or SecretResolver()
     if not holder.strip():
         raise RigError("holder is required (e.g. the CI job URL)")
@@ -182,7 +182,7 @@ def checkout(engine: Engine, pool: str, holder: str, *, ttl_seconds: int = 1800,
                     continue
             _record(session, state, True, "")
             lease = Lease(address=state.address, pool=pool, holder=holder.strip(), purpose=purpose,
-                          expires_at=utcnow() + timedelta(seconds=ttl_seconds),
+                          expires_at=utcnow() + timedelta(seconds=ttl_seconds), queued_seconds=queued_seconds,
                           note=(note + "; healthy after recovery") if note else "")
             session.add(lease)
             session.commit()
@@ -210,21 +210,31 @@ def release(engine: Engine, lease_id: int, result: str, *, secrets: SecretResolv
             _record(session, state, False, f"reported infra-failed by {lease.holder}")
             notes.append("infrastructure failure recorded")
         if restore and state:
-            host = Host.model_validate(state.spec)
-            if host.bmc:
-                try:
-                    power_cycle(host.bmc, secrets)
-                    notes.append("restored: power-cycled via BMC")
-                except Exception as e:
-                    notes.append(f"restore failed: {e}")
-            else:
-                notes.append("no BMC; not restored")
+            notes += _restore(state, lease, secrets)
         lease.status, lease.result, lease.released_at = "released", result, utcnow()
         lease.note = "; ".join(filter(None, [lease.note, *notes]))
         session.add(lease)
         session.commit()
         session.refresh(lease)
         return lease_view(lease, state)
+
+
+def _restore(state: ResourceState, lease: Lease, secrets: SecretResolver) -> list[str]:
+    """Known-good firmware back on (if the lease flashed something else), then a power cycle."""
+    host = Host.model_validate(state.spec)
+    notes = []
+    known_good = host.firmware.known_good if host.firmware else None
+    if known_good and lease.firmware_version and lease.firmware_version != known_good:
+        try:
+            _install(host, state, known_good, None, None, secrets)
+            notes.append(f"restored known-good firmware {known_good}")
+        except Exception as e:
+            notes.append(f"restoring firmware {known_good} failed: {e}")
+    try:
+        notes.append("restored: " + hard_reset(host, secrets))
+    except Exception as e:
+        notes.append(f"not power-cycled: {e}")
+    return notes
 
 
 def _leased(session: Session, lease_id: int) -> tuple[Lease, ResourceState]:
@@ -252,6 +262,28 @@ def _device_version(url: str) -> dict | None:
         return None
 
 
+def _install(host: Host, state: ResourceState, version: str, sha256: str | None, size: int | None,
+             secrets: SecretResolver) -> None:
+    method = host.firmware.method if host.firmware else "http"
+    if method == "command":
+        import shlex
+        import subprocess
+
+        assert host.firmware and host.firmware.command
+        cmd = host.firmware.command.format(address=host.address or "", version=version, sha256=sha256 or "")
+        p = subprocess.run(shlex.split(cmd), capture_output=True, text=True, timeout=900)
+        if p.returncode != 0:
+            raise RigError(f"flash failed: `{cmd}` exited {p.returncode}: {(p.stderr or p.stdout).strip()[-200:]}", 502)
+        return
+    url = _device_url(state)
+    try:
+        r = httpx.post(f"{url}/firmware", json={"version": version, "sha256": sha256, "size": size}, timeout=30)
+    except httpx.HTTPError as e:
+        raise RigError(f"flash failed: {state.name} unreachable: {e}", 502) from e
+    if r.status_code >= 400:
+        raise RigError(f"flash failed: {state.name} answered HTTP {r.status_code}", 502)
+
+
 def device_status(engine: Engine, lease_id: int, secrets: SecretResolver | None = None) -> dict:
     """Health and running firmware of a leased device."""
     with Session(engine) as session:
@@ -265,20 +297,16 @@ def flash(engine: Engine, lease_id: int, version: str, *, sha256: str | None = N
           secrets: SecretResolver | None = None, wait_seconds: float = 60.0) -> dict:
     """Install a firmware build on a leased device and wait until it runs healthy.
 
-    Devices take the image through the LabForge firmware endpoint (`POST <device>/firmware`); other
-    flashing methods (vendor tools, PXE, serial) plug in here. CI never needs device credentials.
+    How the image gets there is declared per device (`firmware.method`): the device's own firmware
+    endpoint (`POST <device>/firmware`), or a command run on the LabForge server - a vendor update
+    tool, a PXE re-image script, a serial flasher. CI never needs device credentials.
     """
     secrets = secrets or SecretResolver()
     with Session(engine) as session:
         lease, state = _leased(session, lease_id)
         url = _device_url(state)
         started = time.monotonic()
-        try:
-            r = httpx.post(f"{url}/firmware", json={"version": version, "sha256": sha256, "size": size}, timeout=30)
-        except httpx.HTTPError as e:
-            raise RigError(f"flash failed: {state.name} unreachable: {e}", 502) from e
-        if r.status_code >= 400:
-            raise RigError(f"flash failed: {state.name} answered HTTP {r.status_code}", 502)
+        _install(Host.model_validate(state.spec), state, version, sha256, size, secrets)
 
         deadline = started + wait_seconds
         running, health = None, None
@@ -294,6 +322,10 @@ def flash(engine: Engine, lease_id: int, version: str, *, sha256: str | None = N
                                              + ("" if ok else " - device did not come back healthy")]))
         session.add(lease)
         session.commit()
+        if ok:
+            lease.firmware_version, lease.firmware_sha256 = version, sha256
+            session.add(lease)
+            session.commit()
         if not ok:
             raise RigError(f"{state.name} did not come back healthy on {version} within {wait_seconds:.0f}s", 504,
                            device=state.name, running=running, health=health.summary if health else None)
@@ -348,3 +380,30 @@ def overview(session: Session) -> list[dict]:
     return [{"pool": name, "devices": devices,
              "free": sum(1 for d in devices if d["rig"] == "free" and d["state"].status == "up")}
             for name, devices in sorted(pools.items())]
+
+
+def trends(session: Session, days: int = 7) -> list[dict]:
+    """Per pool over the last `days`: how busy each device was, how jobs ended, how long they waited."""
+    since = utcnow() - timedelta(days=days)
+    window = days * 86400
+    leases = list(session.exec(select(Lease).where(Lease.acquired_at >= since)))
+    now = utcnow()
+    out = []
+    for pool in sorted({pool_of(m) for m in pool_members(session)}):
+        mine = [lease for lease in leases if lease.pool == pool]
+        held: dict[str, float] = {}
+        for lease in mine:
+            end = lease.released_at or now
+            held[lease.address] = held.get(lease.address, 0.0) + (end - lease.acquired_at).total_seconds()
+        results = {r: sum(1 for lease in mine if lease.result == r) for r in sorted(RESULTS)}
+        waits = [lease.queued_seconds for lease in mine if lease.queued_seconds is not None]
+        out.append({
+            "pool": pool, "leases": len(mine), "results": results,
+            "infraShare": round(results["infra-failed"] / max(1, sum(results.values())), 3),
+            "avgWaitSeconds": round(sum(waits) / len(waits), 1) if waits else 0.0,
+            "maxWaitSeconds": round(max(waits), 1) if waits else 0.0,
+            "utilisation": {m.name: round(held.get(m.address, 0.0) / window, 4)
+                            for m in pool_members(session, pool)},
+            "heldSeconds": {m.name: round(held.get(m.address, 0.0), 3) for m in pool_members(session, pool)},
+        })
+    return out

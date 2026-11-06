@@ -165,7 +165,7 @@ SIM_CONTROL = "http://127.0.0.1:9100"
 
 
 @sim_app.command("run")
-def sim_run(devices: int = typer.Option(3, help="number of simulated sensors"),
+def sim_run(devices: int = typer.Option(4, help="number of simulated sensors"),
             base_port: int = typer.Option(9100, help="control port; device N uses base+N*10+1 (http) and +2 (BMC)"),
             bmc_credentials: str = typer.Option("admin:admin", envvar="LABFORGE_SIM_BMC_CREDENTIALS")) -> None:
     """Run simulated ARM sensors with Redfish BMCs until interrupted (matches infra/test/sim-lab.yaml)."""
@@ -240,12 +240,30 @@ def rig_checkout(pool: str = typer.Option(..., "--pool"), holder: str = typer.Op
                  ttl: int = typer.Option(1800, "--ttl", help="lease length in seconds"),
                  output: str = typer.Option("text", "--output", help="text | json | env"),
                  write: Path | None = typer.Option(None, "--write", help="also save the lease as JSON here"),
+                 wait: int = typer.Option(0, "--wait", help="seconds to wait in line for a free device"),
                  server: str = ServerOpt, token: str | None = TokenOpt) -> None:
-    """Borrow a healthy device. Exit code 2 when none is available."""
+    """Borrow a healthy device. Exit code 2 when none is available (after --wait)."""
     import json
+    import time
 
-    lease = _rig_request("POST", server, "/rigs/checkout", token,
-                         json={"pool": pool, "holder": holder, "ttl_seconds": ttl})
+    import httpx
+
+    started = time.monotonic()
+    while True:
+        waited = round(time.monotonic() - started, 1)
+        r = httpx.post(f"{server.rstrip('/')}/api/v1/rigs/checkout", timeout=120,
+                       headers={"X-LabForge-Token": token} if token else {},
+                       json={"pool": pool, "holder": holder, "ttl_seconds": ttl,
+                             "queued_seconds": waited if wait else None})
+        if r.status_code == 409 and time.monotonic() - started < wait:
+            typer.echo(f"waiting for a free device in {pool} ({waited:.0f}s)", err=True)
+            time.sleep(min(15, max(1, wait / 20)))
+            continue
+        break
+    if r.status_code >= 400:
+        typer.secho(f"error {r.status_code}: {r.json().get('detail', r.text)}", fg="red", err=True)
+        raise typer.Exit(2 if r.status_code == 409 else 1)
+    lease = r.json()
     if write:
         write.write_text(json.dumps(lease, indent=2, default=str))
     if output == "json":

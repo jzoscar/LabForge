@@ -1,7 +1,8 @@
 # Test (simulated): a device rig that runs entirely on this machine.
 # Start the simulator with `labforge sim run`, set LABFORGE_SECRET_SIM_BMC=admin:admin, then this
 # environment can be applied for real: power is checked through each simulated Redfish BMC, the
-# devices are monitored, and CI can check them out from the `sim-sensor` pool.
+# devices are monitored, and CI can check them out from the `sim-sensor` pool. sim-sensor-04 is a
+# budget board without a BMC: it is power-cycled through outlet 4 of the simulated PDU.
 apiVersion: labforge/v1
 kind: Environment
 metadata:
@@ -26,6 +27,7 @@ spec:
       bmc: { type: redfish, address: "http://127.0.0.1:9112", credentialsRef: sim-bmc }
       power: "on"
       connection: { type: none }
+      firmware: { method: http, knownGood: "1.4.2" }
       monitor:
         probes: [ { type: http, port: 9111, path: /version }, { type: http, port: 9111, path: /health } ]
       labels: { pool: sim-sensor, role: sensor }
@@ -38,6 +40,7 @@ spec:
       bmc: { type: redfish, address: "http://127.0.0.1:9122", credentialsRef: sim-bmc }
       power: "on"
       connection: { type: none }
+      firmware: { method: http, knownGood: "1.4.2" }
       monitor:
         probes: [ { type: http, port: 9121, path: /version }, { type: http, port: 9121, path: /health } ]
       labels: { pool: sim-sensor, role: sensor }
@@ -50,6 +53,19 @@ spec:
       bmc: { type: redfish, address: "http://127.0.0.1:9132", credentialsRef: sim-bmc }
       power: "on"
       connection: { type: none }
+      firmware: { method: http, knownGood: "1.4.2" }
       monitor:
         probes: [ { type: http, port: 9131, path: /version }, { type: http, port: 9131, path: /health } ]
       labels: { pool: sim-sensor, role: sensor }
+
+    - name: sim-sensor-04
+      kind: baremetal
+      platform: { os: linux, arch: arm64 }
+      address: 127.0.0.1
+      subnet: sim-net/lo
+      pdu: { type: http, address: "http://127.0.0.1:9100", outlet: 4, credentialsRef: sim-bmc }
+      connection: { type: none }
+      firmware: { method: http, knownGood: "1.4.2" }
+      monitor:
+        probes: [ { type: http, port: 9141, path: /version }, { type: http, port: 9141, path: /health } ]
+      labels: { pool: sim-sensor, role: sensor, board: budget }

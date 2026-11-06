@@ -1,0 +1,25 @@
+# On-device tests in Bitbucket Pipelines, on a self-hosted runner in the lab that can reach LabForge.
+# Repository variables: LABFORGE_SERVER, LABFORGE_API_TOKEN (secured).
+pipelines:
+  default:
+    - step:
+        name: Cross-compile for aarch64
+        image: python:3.12
+        script:
+          - pip install buildpulse
+          - buildpulse build --preset linux-arm64 --docker buildpulse/cross-arm64 --log-dir build-logs
+        services: [docker]
+        artifacts: [ "native/build/linux-arm64/pulse", "build-logs/**" ]
+    - step:
+        name: Test on a device rig
+        runs-on: [ self.hosted, linux, rig.sensor.a ]
+        script:
+          - pip install buildpulse labforge
+          # checkout -> flash -> verify -> test -> release, all recorded; exit code 2 = no device free
+          - >-
+            buildpulse device-test --pool sensor-a --firmware native/build/linux-arm64/pulse
+            --holder "$BITBUCKET_GIT_HTTP_ORIGIN/pipelines/results/$BITBUCKET_BUILD_NUMBER"
+            --log-dir device-logs -- ./run-device-tests
+        after-script:
+          - buildpulse triage latest --log-dir device-logs > device-logs/triage.md || true
+        artifacts: [ "device-logs/**" ]

@@ -1,0 +1,44 @@
+# Bamboo YAML specs: the same on-device test as a stage after the cross-compile.
+# Plan variables: labforge.server, labforge.api.token (password variable).
+# The rig job needs an agent with the capability "rig" = "sensor-a".
+---
+version: 2
+plan:
+  project-key: LAB
+  key: DEVTEST
+  name: Firmware on device rigs
+stages:
+  - Build:
+      jobs: [ Cross-compile ]
+  - Device test:
+      jobs: [ On-device test ]
+
+Cross-compile:
+  tasks:
+    - script:
+        - pip install buildpulse
+        - buildpulse build --preset linux-arm64 --docker buildpulse/cross-arm64 --log-dir build-logs
+  artifacts:
+    - name: firmware
+      pattern: native/build/linux-arm64/pulse
+      shared: true
+
+On-device test:
+  requirements:
+    - rig: sensor-a
+  artifact-subscriptions:
+    - artifact: firmware
+  tasks:
+    - script:
+        environment: LABFORGE_SERVER=${bamboo.labforge.server} LABFORGE_API_TOKEN=${bamboo.labforge.api.token}
+        scripts:
+          - pip install buildpulse labforge
+          - >-
+            buildpulse device-test --pool sensor-a --firmware native/build/linux-arm64/pulse
+            --holder "${bamboo.resultsUrl}" --log-dir device-logs -- ./run-device-tests
+  final-tasks:
+    - script:
+        - buildpulse triage latest --log-dir device-logs > device-logs/triage.md || true
+  artifacts:
+    - name: device-logs
+      pattern: device-logs/**

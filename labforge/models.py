@@ -109,6 +109,10 @@ class Lease(SQLModel, table=True):
     expires_at: datetime
     released_at: datetime | None = None
     note: str = ""
+    # Added after the first release: nullable so existing databases migrate in place.
+    queued_seconds: float | None = None  # how long the job waited for a free device
+    firmware_version: str | None = None  # last build flashed during this lease
+    firmware_sha256: str | None = None
 
 
 class DeviceHealth(SQLModel, table=True):

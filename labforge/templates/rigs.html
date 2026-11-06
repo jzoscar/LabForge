@@ -70,11 +70,34 @@
 </section>
 {% endfor %}
 
+{% if trends %}
+<section class="card">
+  <h2>Last 7 days</h2>
+  <table>
+    <thead><tr><th>Pool</th><th>Leases</th><th>Passed</th><th>Failed</th><th>Infra-failed</th><th>Avg / max wait</th><th>Device utilisation</th></tr></thead>
+    <tbody>
+    {% for name, t in trends.items() %}
+    <tr>
+      <td class="mono">{{ name }}</td>
+      <td>{{ t.leases }}</td>
+      <td class="ok">{{ t.results['passed'] }}</td>
+      <td class="{{ 'err' if t.results['failed'] }}">{{ t.results['failed'] }}</td>
+      <td class="{{ 'err' if t.results['infra-failed'] }}">{{ t.results['infra-failed'] }}{% if t.leases %} <span class="sub">({{ (t.infraShare * 100)|round(0)|int }}%)</span>{% endif %}</td>
+      <td>{{ t.avgWaitSeconds|round(0)|int }}s / {{ t.maxWaitSeconds|round(0)|int }}s</td>
+      <td>{% for dev, u in t.utilisation.items() %}<div class="util"><span class="mono sub">{{ dev }}</span><span class="bar"><i style="width: {{ [u * 100, 100]|min }}%"></i></span><span class="sub">{{ (u * 100)|round(1) }}%</span></div>{% endfor %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="sub">Infra-failed share is the rig's own failure rate: high values point at devices, not code.</p>
+</section>
+{% endif %}
+
 {% if history %}
 <section class="card">
   <h2>Recent leases</h2>
   <table>
-    <thead><tr><th>#</th><th>Device</th><th>Holder</th><th>Status</th><th>Result</th><th>Held</th><th>Notes</th></tr></thead>
+    <thead><tr><th>#</th><th>Device</th><th>Holder</th><th>Status</th><th>Result</th><th>Firmware</th><th>Held</th><th>Notes</th></tr></thead>
     <tbody>
     {% for lease, s in history %}
     <tr>
@@ -83,6 +106,7 @@
       <td>{{ lease.holder }}</td>
       <td><span class="badge rig-{{ lease.status }}">{{ lease.status }}</span></td>
       <td>{% if lease.result %}<span class="badge res-{{ lease.result }}">{{ lease.result }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td class="mono sub">{{ lease.firmware_version or '—' }}</td>
       <td class="sub">{{ lease.acquired_at|ago }}{% if lease.released_at %} · {{ ((lease.released_at - lease.acquired_at).total_seconds() / 60)|round(1) }} min{% endif %}</td>
       <td class="sub">{{ lease.note }}</td>
     </tr>

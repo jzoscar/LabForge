@@ -28,6 +28,7 @@ def rigs_page(request: Request, session: Session = Depends(get_session), message
                for lease in session.exec(select(Lease).order_by(Lease.id.desc()).limit(25))]
     return templates.TemplateResponse(request, "rigs.html", {
         "nav": "rigs", "pools": pools, "history": history, "ui_edit": request.app.state.settings.ui_edit,
+        "trends": {t["pool"]: t for t in rigs.trends(session, 7)},
         "counts": {k: sum(1 for d in devices if d["rig"] == k) for k in ("free", "leased", "quarantined")},
         "total": len(devices), "message": message, "error": error,
     })

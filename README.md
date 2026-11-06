@@ -111,7 +111,14 @@ every pool, who holds what, and why a device is quarantined).
   healthy device is handed out, otherwise the next one is tried
 - **Two consecutive failed health checks quarantine** a device until a person returns it to the pool.
   These are infrastructure failures, never test failures; a job can also report `infra-failed`
-- **Release** power-cycles the device back to a known state, whatever the test result
+- **Release** puts the device back to a known state, whatever the test result: its known-good firmware
+  (`firmware.knownGood`) is flashed back if the job left another build on it, then it is power-cycled
+- **Hard reset** goes through the BMC (Redfish / IPMI) or, for boards without one, the switched PDU
+  outlet that feeds it (`pdu:`, HTTP or APC SNMP)
+- **Flashing** follows each device's `firmware.method`: the device's firmware endpoint, or a command
+  run on the LabForge server (vendor update tool, PXE re-image, serial flasher)
+- **Queueing**: `checkout --wait 600` waits in line for a free device; wait times, results and
+  per-device utilisation show up as 7-day trends on the Rigs page (`GET /api/v1/rigs/trends`)
 - **Leases expire**, so a crashed job cannot hold a device forever
 - Checkouts are serialized, so two jobs never get the same device
 
@@ -132,8 +139,9 @@ REST: `GET /api/v1/rigs`, `POST /api/v1/rigs/checkout`, `POST /api/v1/rigs/lease
 `GET /api/v1/rigs/leases/{id}/device`, `POST /api/v1/rigs/leases/{id}/release`,
 `POST /api/v1/rigs/leases/{id}/renew`, `GET /api/v1/rigs/leases`, `POST /api/v1/rigs/devices/{address}/unquarantine`.
 
-A GitHub Actions job on a self-hosted runner in the lab (the same three commands work in Bamboo or
-Bitbucket Pipelines):
+A GitHub Actions job on a self-hosted runner in the lab (ready-made equivalents for
+[Bitbucket Pipelines](deploy/ci/bitbucket-pipelines.yml) and [Bamboo specs](deploy/ci/bamboo-specs.yaml)
+are in `deploy/ci/`):
 
 ```yaml
 on-device-tests:
@@ -319,7 +327,7 @@ boards; on Windows, rely on the BMC (Redfish) for temperatures.
 | `labforge/monitor/` | Async probes, health sweeps, status aggregation |
 | `labforge/api.py` · `web.py` · `web_iac.py` · `templates/` | Backend API and web pages |
 | `labforge/rigs.py` · `web_rigs.py` | Device test rigs: checkout, health check, self-healing, quarantine, release |
-| `labforge/sim.py` | Simulated ARM sensors with Redfish BMCs and fault injection |
+| `labforge/sim.py` | Simulated ARM sensors with Redfish BMCs, a switched PDU, and fault injection |
 | `labforge/agent.py` | Host agent |
 
 ## Configuration
@@ -349,7 +357,7 @@ pytest
 |---|---|---|
 | **M0 Platform foundation** | ✅ Done (v0.1.0) | IaC, plan/apply, drivers, monitoring, agent, web console, IaC workspace |
 | **M1 Build & test lab onboarding** | 🚧 In progress | Device pools, build machines, runners and cache services all managed as code |
-| **M2 Device test rigs (on-device CI)** | 🚧 Core done | CI checks out a device, flashes it, runs on-device tests, then returns and restores it |
+| **M2 Device test rigs (on-device CI)** | ✅ Done (simulated rigs) | CI checks out a device, flashes it, runs on-device tests, then returns and restores it |
 | **M3 Alerting & on-call** | ⏳ Planned | Push problems to the right person via Slack / Teams / WhatsApp / SMS |
 | **M4 Build farm capacity & speed** | ⏳ Planned | Short queues, warm caches, build time that is measured and optimised |
 | **M5 Security, compliance & GitOps** | ⏳ Planned | Safe multi-user operation and CRA traceability |
@@ -389,14 +397,15 @@ QEMU proves the ARM binary runs; it does not prove the product works on the devi
 - [x] Pre-test health check (boot, network, version endpoint); a failure is recorded as an **infrastructure failure**, not a test failure
 - [x] On return, always power-cycle the device back to a known state, whether the tests passed or failed
 - [x] Flash a firmware build onto a leased device and verify it runs exactly that build (version + sha256)
-- [ ] Device-specific flashing (vendor update tools, PXE) and restoring a known-good **image** on return (not just a power cycle)
+- [x] Device-specific flashing (`firmware.method`: device endpoint, or a command for vendor tools / PXE) and restoring the known-good firmware on return
 - [x] Self-healing through the BMC: a device that fails its health check is power-cycled and re-checked; quarantined after two failed health checks
-- [ ] Hard reset through a **PDU** for devices without a BMC
+- [x] Hard reset through a **PDU** outlet (HTTP or APC SNMP) for devices without a BMC
 - [x] CLI and REST API any CI system can call (`labforge rig checkout / release`), with a GitHub Actions example
-- [ ] Ready-made Bamboo and Bitbucket Pipelines steps
+- [x] Ready-made Bamboo specs and Bitbucket Pipelines steps (`deploy/ci/`) *(not yet run against a real Bamboo / Bitbucket)*
 - [x] BuildPulse integration: `buildpulse device-test` records checkout → flash → verify → test → release in `report.json` with device, lease, firmware version and sha256; `buildpulse triage` separates `infrastructure` from `test` failures
 - [x] Rigs page: pool state, holders, lease expiry, quarantine reasons, lease history
-- [ ] Rig trends: device utilisation, queue time, failure causes (code / device / network); flaky tests tracked separately
+- [x] Rig trends: device utilisation, queue time (`checkout --wait`), results split into passed / failed / infra-failed
+- [ ] Flaky-test tracking across runs *(needs per-test results from the on-device suite)*
 
 ### M3 Alerting & on-call
 

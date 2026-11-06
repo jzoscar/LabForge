@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from labforge.iac.secrets import SecretResolver
-from labforge.iac.spec import Bmc, Host
+from labforge.iac.spec import Bmc, Host, Pdu
 
 if TYPE_CHECKING:
     from labforge.iac.applier import ApplyContext
@@ -93,3 +93,34 @@ def power_cycle(bmc: Bmc, secrets: SecretResolver, timeout: float = 15) -> None:
         return
     with RedfishClient(bmc, secrets, timeout) as rf:
         rf.reset("ForceRestart")
+
+
+APC_OUTLET_CTL = "1.3.6.1.4.1.318.1.1.4.4.2.1.3"  # PowerNet-MIB sPDUOutletCtl; 3 = immediate reboot
+
+
+def pdu_cycle(pdu: Pdu, secrets: SecretResolver, timeout: float = 15) -> None:
+    """Power-cycle the PDU outlet feeding a device."""
+    if pdu.type == "apc-snmp":
+        import subprocess
+
+        community = secrets.get(pdu.credentials_ref) if pdu.credentials_ref else "private"
+        p = subprocess.run(["snmpset", "-v1", "-c", community, pdu.address, f"{APC_OUTLET_CTL}.{pdu.outlet}", "i", "3"],
+                           capture_output=True, text=True, timeout=timeout)
+        if p.returncode != 0:
+            raise RuntimeError(f"snmpset failed: {p.stderr.strip()[-200:]}")
+        return
+    base = pdu.address if pdu.address.startswith(("http://", "https://")) else f"http://{pdu.address}"
+    auth = secrets.credentials(pdu.credentials_ref) if pdu.credentials_ref else None
+    r = httpx.post(f"{base}/pdu/outlets/{pdu.outlet}", json={"action": "cycle"}, auth=auth, timeout=timeout)
+    r.raise_for_status()
+
+
+def hard_reset(host: Host, secrets: SecretResolver) -> str:
+    """Power-cycle through the BMC, else through the PDU outlet. Returns how it was done."""
+    if host.bmc:
+        power_cycle(host.bmc, secrets)
+        return "power-cycled via BMC"
+    if host.pdu:
+        pdu_cycle(host.pdu, secrets)
+        return f"power-cycled via PDU outlet {host.pdu.outlet}"
+    raise RuntimeError("no BMC or PDU to power-cycle")

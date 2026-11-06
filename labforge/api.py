@@ -214,6 +214,7 @@ class CheckoutRequest(BaseModel):
     holder: str
     ttl_seconds: int = 1800
     purpose: str = ""
+    queued_seconds: float | None = None  # how long the caller has been waiting (for queue trends)
 
 
 class ReleaseRequest(BaseModel):
@@ -251,7 +252,15 @@ def rig_checkout(req: CheckoutRequest, request: Request) -> dict:
     from labforge import rigs
 
     return _rig_call(lambda: rigs.checkout(request.app.state.engine, req.pool, req.holder,
-                                           ttl_seconds=req.ttl_seconds, purpose=req.purpose))
+                                           ttl_seconds=req.ttl_seconds, purpose=req.purpose,
+                                           queued_seconds=req.queued_seconds))
+
+
+@router.get("/rigs/trends")
+def rig_trends(days: int = 7, session: Session = Depends(get_session)) -> list[dict]:
+    from labforge.rigs import trends
+
+    return trends(session, min(max(days, 1), 90))
 
 
 @router.post("/rigs/leases/{lease_id}/release", dependencies=[Depends(require_token)])

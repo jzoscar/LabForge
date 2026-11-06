@@ -88,6 +88,29 @@ class Bmc(Model):
     system_id: str | None = None  # Redfish system id; defaults to the first system
 
 
+class Pdu(Model):
+    """Switched PDU outlet feeding the device: a hard reset for boards without a BMC."""
+
+    type: Literal["http", "apc-snmp"] = "http"
+    address: str
+    outlet: int = Field(ge=1)
+    credentials_ref: str | None = None  # http: "user:password"; apc-snmp: SNMP write community
+
+
+class Firmware(Model):
+    """How a rig device takes a build, and what it goes back to after a test."""
+
+    method: Literal["http", "command"] = "http"  # http: POST <device>/firmware
+    command: str | None = None  # method command: run on the LabForge server; {address} {version} {sha256}
+    known_good: str | None = None  # flashed back on release when a test left a different version
+
+    @model_validator(mode="after")
+    def _check(self) -> Firmware:
+        if self.method == "command" and not self.command:
+            raise ValueError("firmware method command needs a command")
+        return self
+
+
 class Connection(Model):
     type: Literal["ssh", "winrm", "none"] = "ssh"
     user: str | None = None
@@ -149,7 +172,9 @@ class Host(Model):
     address: str | None = None
     subnet: str | None = None  # "<network>/<subnet>"
     bmc: Bmc | None = None
+    pdu: Pdu | None = None
     power: Literal["on", "off"] | None = None  # desired power state (requires bmc)
+    firmware: Firmware | None = None
     connection: Connection = Connection()
     bootstrap: list[str] = []  # idempotent commands; run on create and when changed
     monitor: Monitor = Monitor()
